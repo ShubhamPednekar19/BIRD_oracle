@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Script to add tables and columns metadata to BIRD dev.json questions.
+Script to add tables and columns metadata to BIRD dev.json questions
+and convert SQLite SQL to Oracle SQL format.
 
-This script parses the SQL field in each question and extracts tables with
-their associated columns in a nested structure:
+This script parses the SQL field in each question and:
+1. Extracts tables with their associated columns in a nested structure
+2. Converts SQLite SQL syntax to Oracle SQL syntax
 
+Output structure:
 {
   "tables": [
     {"name": "table_name", "columns": [{"name": "col1"}, {"name": "col2"}]}
-  ]
+  ],
+  "oracle_SQL": "SELECT ... FROM ... FETCH FIRST 1 ROWS ONLY"
 }
 
 Usage:
@@ -53,6 +57,241 @@ SQL_KEYWORDS = {
     'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10',
     'T11', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17', 'T18', 'T19', 'T20'
 }
+
+# Oracle reserved words that need to be quoted
+ORACLE_RESERVED_WORDS = {
+    'ACCESS', 'ADD', 'ALL', 'ALTER', 'AND', 'ANY', 'AS', 'ASC', 'AUDIT',
+    'BETWEEN', 'BY', 'CHAR', 'CHECK', 'CLUSTER', 'COLUMN', 'COMMENT',
+    'COMPRESS', 'CONNECT', 'CREATE', 'CURRENT', 'DATE', 'DECIMAL', 'DEFAULT',
+    'DELETE', 'DESC', 'DISTINCT', 'DROP', 'ELSE', 'EXCLUSIVE', 'EXISTS',
+    'FILE', 'FLOAT', 'FOR', 'FROM', 'GRANT', 'GROUP', 'HAVING', 'IDENTIFIED',
+    'IMMEDIATE', 'IN', 'INCREMENT', 'INDEX', 'INITIAL', 'INSERT', 'INTEGER',
+    'INTERSECT', 'INTO', 'IS', 'LEVEL', 'LIKE', 'LOCK', 'LONG', 'MAXEXTENTS',
+    'MINUS', 'MLSLABEL', 'MODE', 'MODIFY', 'NOAUDIT', 'NOCOMPRESS', 'NOT',
+    'NOWAIT', 'NULL', 'NUMBER', 'OF', 'OFFLINE', 'ON', 'ONLINE', 'OPTION',
+    'OR', 'ORDER', 'PCTFREE', 'PRIOR', 'PUBLIC', 'RAW', 'RENAME', 'RESOURCE',
+    'REVOKE', 'ROW', 'ROWID', 'ROWNUM', 'ROWS', 'SELECT', 'SESSION', 'SET',
+    'SHARE', 'SIZE', 'SMALLINT', 'START', 'SUCCESSFUL', 'SYNONYM', 'SYSDATE',
+    'TABLE', 'THEN', 'TO', 'TRIGGER', 'UID', 'UNION', 'UNIQUE', 'UPDATE',
+    'USER', 'VALIDATE', 'VALUES', 'VARCHAR', 'VARCHAR2', 'VIEW', 'WHENEVER',
+    'WHERE', 'WITH', 'CROSS', 'STATUS', 'TYPE', 'RANK', 'RESULT', 'LOOP',
+    'OPEN', 'CLOSE', 'CURSOR', 'FETCH', 'EXCEPTION', 'RAISE', 'END', 'IF',
+    'RETURN', 'FUNCTION', 'PROCEDURE', 'PACKAGE', 'BODY', 'EXECUTE',
+    'TRANSACTION', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'ACCOUNT', 'ACTION',
+    'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'ZONE', 'TIME',
+    'TIMESTAMP', 'INTERVAL', 'LOCAL', 'GLOBAL', 'TEMPORARY', 'PRESERVE'
+}
+
+
+def needs_oracle_quoting(identifier: str) -> bool:
+    """Check if an identifier needs to be quoted in Oracle."""
+    upper_id = identifier.upper()
+    if upper_id in ORACLE_RESERVED_WORDS:
+        return True
+    if not identifier[0].isalpha() and identifier[0] != '_':
+        return True
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier):
+        return True
+    return False
+
+
+def convert_identifier_to_oracle(identifier: str) -> str:
+    """Convert a SQLite identifier to Oracle format."""
+    # Remove backticks
+    identifier = identifier.strip('`')
+
+    if needs_oracle_quoting(identifier):
+        # Escape double quotes and wrap in double quotes
+        identifier = identifier.replace('"', '""')
+        return f'"{identifier}"'
+    return identifier
+
+
+def convert_sqlite_to_oracle_sql(sql: str) -> str:
+    """
+    Convert SQLite SQL syntax to Oracle SQL syntax.
+
+    Handles:
+    - LIMIT n -> FETCH FIRST n ROWS ONLY
+    - LIMIT n OFFSET m -> OFFSET m ROWS FETCH NEXT n ROWS ONLY
+    - IFNULL(a, b) -> NVL(a, b)
+    - Backticks -> double quotes
+    - CAST(x AS REAL/INTEGER/TEXT) -> Oracle types
+    - GROUP_CONCAT -> LISTAGG
+    - IIF -> CASE WHEN
+    - strftime -> TO_CHAR
+    - Date functions
+    """
+    oracle_sql = sql
+
+    # Convert backtick-quoted identifiers to Oracle double-quoted
+    def replace_backtick(match):
+        identifier = match.group(1)
+        return convert_identifier_to_oracle(identifier)
+
+    oracle_sql = re.sub(r'`([^`]+)`', replace_backtick, oracle_sql)
+
+    # Convert IFNULL to NVL
+    oracle_sql = re.sub(r'\bIFNULL\s*\(', 'NVL(', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert NULLIF (same in Oracle, but ensure uppercase)
+    oracle_sql = re.sub(r'\bNULLIF\s*\(', 'NULLIF(', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert IIF(condition, true_val, false_val) to CASE WHEN condition THEN true_val ELSE false_val END
+    def convert_iif(match):
+        # This is a simplified conversion - may need adjustment for complex nested cases
+        content = match.group(1)
+        # Find the first comma (condition separator)
+        depth = 0
+        first_comma = -1
+        second_comma = -1
+        for i, char in enumerate(content):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif char == ',' and depth == 0:
+                if first_comma == -1:
+                    first_comma = i
+                else:
+                    second_comma = i
+                    break
+
+        if first_comma != -1 and second_comma != -1:
+            condition = content[:first_comma].strip()
+            true_val = content[first_comma+1:second_comma].strip()
+            false_val = content[second_comma+1:].strip()
+            return f'CASE WHEN {condition} THEN {true_val} ELSE {false_val} END'
+        return match.group(0)
+
+    oracle_sql = re.sub(r'\bIIF\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)', convert_iif, oracle_sql, flags=re.IGNORECASE)
+
+    # Convert GROUP_CONCAT to LISTAGG
+    # GROUP_CONCAT(col) -> LISTAGG(col, ',') WITHIN GROUP (ORDER BY col)
+    # GROUP_CONCAT(col, sep) -> LISTAGG(col, sep) WITHIN GROUP (ORDER BY col)
+    def convert_group_concat(match):
+        content = match.group(1)
+        parts = content.split(',', 1)
+        col = parts[0].strip()
+        sep = parts[1].strip() if len(parts) > 1 else "','"
+        return f'LISTAGG({col}, {sep}) WITHIN GROUP (ORDER BY {col})'
+
+    oracle_sql = re.sub(r'\bGROUP_CONCAT\s*\(([^)]+)\)', convert_group_concat, oracle_sql, flags=re.IGNORECASE)
+
+    # Convert CAST types - use word boundary to match type names
+    # Handle AS REAL, AS INTEGER, etc. by replacing the type name directly
+    oracle_sql = re.sub(r'\bAS\s+REAL\b', 'AS NUMBER', oracle_sql, flags=re.IGNORECASE)
+    oracle_sql = re.sub(r'\bAS\s+INTEGER\b', 'AS NUMBER', oracle_sql, flags=re.IGNORECASE)
+    oracle_sql = re.sub(r'\bAS\s+INT\b', 'AS NUMBER', oracle_sql, flags=re.IGNORECASE)
+    oracle_sql = re.sub(r'\bAS\s+TEXT\b', 'AS VARCHAR2(4000)', oracle_sql, flags=re.IGNORECASE)
+    oracle_sql = re.sub(r'\bAS\s+FLOAT\b', 'AS NUMBER', oracle_sql, flags=re.IGNORECASE)
+    oracle_sql = re.sub(r'\bAS\s+NUMERIC\b', 'AS NUMBER', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert strftime to TO_CHAR
+    # strftime('%Y', date_col) -> TO_CHAR(date_col, 'YYYY')
+    # strftime('%m', date_col) -> TO_CHAR(date_col, 'MM')
+    # strftime('%d', date_col) -> TO_CHAR(date_col, 'DD')
+    # strftime('%Y-%m-%d', date_col) -> TO_CHAR(date_col, 'YYYY-MM-DD')
+    def convert_strftime(match):
+        format_str = match.group(1)
+        col = match.group(2)
+
+        # Convert SQLite format to Oracle format
+        oracle_format = format_str
+        oracle_format = oracle_format.replace('%Y', 'YYYY')
+        oracle_format = oracle_format.replace('%m', 'MM')
+        oracle_format = oracle_format.replace('%d', 'DD')
+        oracle_format = oracle_format.replace('%H', 'HH24')
+        oracle_format = oracle_format.replace('%M', 'MI')
+        oracle_format = oracle_format.replace('%S', 'SS')
+        oracle_format = oracle_format.replace('%W', 'IW')  # Week number
+        oracle_format = oracle_format.replace('%j', 'DDD')  # Day of year
+        oracle_format = oracle_format.replace('%w', 'D')    # Day of week
+
+        return f"TO_CHAR({col}, '{oracle_format}')"
+
+    oracle_sql = re.sub(r"\bstrftime\s*\(\s*'([^']+)'\s*,\s*([^)]+)\)", convert_strftime, oracle_sql, flags=re.IGNORECASE)
+
+    # Convert date('now') to SYSDATE
+    oracle_sql = re.sub(r"\bdate\s*\(\s*'now'\s*\)", 'SYSDATE', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert datetime('now') to SYSTIMESTAMP
+    oracle_sql = re.sub(r"\bdatetime\s*\(\s*'now'\s*\)", 'SYSTIMESTAMP', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert RANDOM() to DBMS_RANDOM.VALUE
+    oracle_sql = re.sub(r'\bRANDOM\s*\(\s*\)', 'DBMS_RANDOM.VALUE', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert TOTAL() to SUM() (TOTAL is SQLite-specific)
+    oracle_sql = re.sub(r'\bTOTAL\s*\(', 'SUM(', oracle_sql, flags=re.IGNORECASE)
+
+    # Convert GLOB to LIKE (approximate - GLOB uses * and ?, LIKE uses % and _)
+    # This is a simplified conversion
+    def convert_glob(match):
+        col = match.group(1)
+        pattern = match.group(2)
+        # Convert GLOB wildcards to LIKE wildcards
+        like_pattern = pattern.replace('*', '%').replace('?', '_')
+        return f"{col} LIKE {like_pattern}"
+
+    oracle_sql = re.sub(r"(\w+)\s+GLOB\s+('[^']+')", convert_glob, oracle_sql, flags=re.IGNORECASE)
+
+    # Convert printf to TO_CHAR for number formatting
+    # printf('%.2f', col) -> TO_CHAR(col, '99999999.99')
+    def convert_printf(match):
+        format_str = match.group(1)
+        col = match.group(2)
+        # Simple conversion for common formats
+        if '.2f' in format_str:
+            return f"TO_CHAR({col}, 'FM99999999990.00')"
+        elif '.1f' in format_str:
+            return f"TO_CHAR({col}, 'FM99999999990.0')"
+        elif '%d' in format_str or '%i' in format_str:
+            return f"TO_CHAR({col}, 'FM99999999999')"
+        return f"TO_CHAR({col})"
+
+    oracle_sql = re.sub(r"\bprintf\s*\(\s*'([^']+)'\s*,\s*([^)]+)\)", convert_printf, oracle_sql, flags=re.IGNORECASE)
+
+    # Handle LIMIT and OFFSET - must be done last as it restructures the query
+    # LIMIT n OFFSET m -> OFFSET m ROWS FETCH NEXT n ROWS ONLY
+    # LIMIT n -> FETCH FIRST n ROWS ONLY
+
+    # Check for LIMIT with OFFSET
+    limit_offset_match = re.search(r'\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\s*$', oracle_sql, re.IGNORECASE)
+    if limit_offset_match:
+        limit_val = limit_offset_match.group(1)
+        offset_val = limit_offset_match.group(2)
+        oracle_sql = re.sub(r'\bLIMIT\s+\d+\s+OFFSET\s+\d+\s*$',
+                           f'OFFSET {offset_val} ROWS FETCH NEXT {limit_val} ROWS ONLY',
+                           oracle_sql, flags=re.IGNORECASE)
+    else:
+        # Check for OFFSET before LIMIT (SQLite allows both orders)
+        offset_limit_match = re.search(r'\bOFFSET\s+(\d+)\s+LIMIT\s+(\d+)\s*$', oracle_sql, re.IGNORECASE)
+        if offset_limit_match:
+            offset_val = offset_limit_match.group(1)
+            limit_val = offset_limit_match.group(2)
+            oracle_sql = re.sub(r'\bOFFSET\s+\d+\s+LIMIT\s+\d+\s*$',
+                               f'OFFSET {offset_val} ROWS FETCH NEXT {limit_val} ROWS ONLY',
+                               oracle_sql, flags=re.IGNORECASE)
+        else:
+            # Simple LIMIT without OFFSET
+            limit_match = re.search(r'\bLIMIT\s+(\d+)\s*$', oracle_sql, re.IGNORECASE)
+            if limit_match:
+                limit_val = limit_match.group(1)
+                oracle_sql = re.sub(r'\bLIMIT\s+\d+\s*$',
+                                   f'FETCH FIRST {limit_val} ROWS ONLY',
+                                   oracle_sql, flags=re.IGNORECASE)
+
+    # Convert != to <> (both work in Oracle, but <> is more standard)
+    # Actually, Oracle supports both, so this is optional
+    # oracle_sql = oracle_sql.replace('!=', '<>')
+
+    # Convert || for string concatenation (same in both SQLite and Oracle)
+    # No change needed
+
+    # Convert SUBSTR (same in both, but ensure proper case)
+    # No change needed as Oracle supports SUBSTR
+
+    return oracle_sql
 
 
 def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
@@ -228,7 +467,8 @@ def extract_tables_with_columns(sql: str) -> List[Dict]:
 
 def process_dev_file(input_path: str, output_path: str) -> None:
     """
-    Process the dev.json file and add tables with nested columns metadata.
+    Process the dev.json file and add tables with nested columns metadata
+    and Oracle SQL conversion.
 
     Args:
         input_path: Path to input dev.json file
@@ -243,8 +483,14 @@ def process_dev_file(input_path: str, output_path: str) -> None:
 
     for i, question in enumerate(questions):
         sql = question.get('SQL', '')
+
+        # Extract tables and columns
         tables_with_columns = extract_tables_with_columns(sql)
         question['tables'] = tables_with_columns
+
+        # Convert SQL to Oracle format
+        oracle_sql = convert_sqlite_to_oracle_sql(sql)
+        question['oracle_SQL'] = oracle_sql
 
         if (i + 1) % 100 == 0:
             print(f"  Processed {i + 1} questions...")
