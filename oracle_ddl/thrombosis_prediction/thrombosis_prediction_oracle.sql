@@ -1,0 +1,82 @@
+-- Oracle DDL for thrombosis_prediction.sqlite
+-- Converted from SQLite schema
+
+CREATE TABLE Examination
+(
+    ID NUMBER,
+    "Examination Date" DATE,
+    "aCL IgG" NUMBER,
+    "aCL IgM" NUMBER,
+    ANA NUMBER,
+    "ANA Pattern" VARCHAR2(4000),
+    "aCL IgA" NUMBER,
+    Diagnosis VARCHAR2(4000),
+    KCT VARCHAR2(4000),
+    RVVT VARCHAR2(4000),
+    LAC VARCHAR2(4000),
+    Symptoms VARCHAR2(4000),
+    Thrombosis NUMBER,
+    FOREIGN KEY (ID) REFERENCES Patient (ID) ON DELETE CASCADE
+);
+
+CREATE TABLE Laboratory
+(
+    ID NUMBER DEFAULT 0 NOT NULL,
+    "Date" DATE DEFAULT '0000-00-00' NOT NULL,
+    GOT NUMBER,
+    GPT NUMBER,
+    LDH NUMBER,
+    ALP NUMBER,
+    TP NUMBER,
+    ALB NUMBER,
+    UA NUMBER,
+    UN NUMBER,
+    CRE NUMBER,
+    "T-BIL" NUMBER,
+    "T-CHO" NUMBER,
+    TG NUMBER,
+    CPK NUMBER,
+    GLU NUMBER,
+    WBC NUMBER,
+    RBC NUMBER,
+    HGB NUMBER,
+    HCT NUMBER,
+    PLT NUMBER,
+    PT NUMBER,
+    APTT NUMBER,
+    FG NUMBER,
+    PIC NUMBER,
+    TAT NUMBER,
+    TAT2 NUMBER,
+    "U-PRO" VARCHAR2(4000),
+    IGG NUMBER,
+    IGA NUMBER,
+    IGM NUMBER,
+    CRP VARCHAR2(4000),
+    RA VARCHAR2(4000),
+    RF VARCHAR2(4000),
+    C3 NUMBER,
+    C4 NUMBER,
+    RNP VARCHAR2(4000),
+    SM VARCHAR2(4000),
+    SC170 VARCHAR2(4000),
+    SSA VARCHAR2(4000),
+    SSB VARCHAR2(4000),
+    CENTROMEA VARCHAR2(4000),
+    DNA VARCHAR2(4000),
+    "DNA-II" NUMBER,
+    PRIMARY KEY (ID, "Date"),
+    FOREIGN KEY (ID) REFERENCES Patient (ID) ON DELETE CASCADE
+);
+
+CREATE TABLE Patient
+(
+    ID NUMBER DEFAULT 0 NOT NULL,
+    SEX VARCHAR2(4000),
+    Birthday DATE,
+    Description DATE,
+    "First Date" DATE,
+    Admission VARCHAR2(4000),
+    Diagnosis VARCHAR2(4000),
+    PRIMARY KEY (ID)
+);
