@@ -2,9 +2,14 @@
 """
 Script to add tables and columns metadata to BIRD dev.json questions.
 
-This script parses the SQL field in each question and extracts:
-- tables: Array of table names used in the SQL query
-- columns: Array of column names used in the SQL query
+This script parses the SQL field in each question and extracts tables with
+their associated columns in a nested structure:
+
+{
+  "tables": [
+    {"name": "table_name", "columns": [{"name": "col1"}, {"name": "col2"}]}
+  ]
+}
 
 Usage:
     python add_dev_questions_metadata.py <input_dev.json> [output_dev.json]
@@ -16,7 +21,8 @@ Example:
 import json
 import re
 import sys
-from typing import List, Set, Tuple
+from typing import List, Dict, Set, Tuple
+from collections import defaultdict
 
 
 # SQL keywords to exclude from columns
@@ -31,7 +37,6 @@ SQL_KEYWORDS = {
     'INTEGER', 'REAL', 'TEXT', 'NUMERIC', 'BLOB', 'VARCHAR', 'CHAR', 'INT',
     'CREATE', 'TABLE', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER',
     'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'INDEX', 'UNIQUE',
-    'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10',
     'IFNULL', 'IIF', 'SUBSTR', 'LENGTH', 'UPPER', 'LOWER', 'TRIM',
     'REPLACE', 'INSTR', 'PRINTF', 'STRFTIME', 'DATE', 'TIME', 'DATETIME',
     'NULLS', 'FIRST', 'LAST', 'WITH', 'RECURSIVE', 'OVER', 'PARTITION',
@@ -42,217 +47,188 @@ SQL_KEYWORDS = {
     'NATURAL', 'USING', 'FULL', 'BOOLEAN', 'DOUBLE', 'FLOAT', 'DECIMAL',
     'BIGINT', 'SMALLINT', 'TINYINT', 'NUMBER', 'STRING', 'TIMESTAMP',
     'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'INTERVAL',
-    'EXTRACT', 'JULIANDAY', 'RANDOM', 'ABS', 'SIGN', 'CEIL', 'FLOOR',
-    'POWER', 'SQRT', 'LOG', 'LOG10', 'EXP', 'MOD', 'PI', 'SIN', 'COS', 'TAN'
+    'EXTRACT', 'JULIANDAY', 'RANDOM', 'SIGN', 'CEIL', 'FLOOR',
+    'POWER', 'SQRT', 'LOG', 'LOG10', 'EXP', 'MOD', 'PI', 'SIN', 'COS', 'TAN',
+    # Table aliases
+    'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10',
+    'T11', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17', 'T18', 'T19', 'T20'
 }
 
-# Table aliases to skip
-TABLE_ALIASES = {'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10'}
 
-
-def extract_quoted_identifiers(sql: str) -> Tuple[Set[str], str]:
+def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
     """
-    Extract all quoted identifiers (backticks, double quotes, brackets) and
-    replace them with placeholders.
+    Extract table names and their aliases from SQL query.
 
     Returns:
-        Tuple of (set of quoted identifiers, modified SQL with placeholders)
+        Tuple of (alias_to_table mapping, list of table names)
     """
-    identifiers = set()
-    placeholder_map = {}
-    placeholder_count = [0]  # Use list for mutable int in closure
-
-    def replace_with_placeholder(match):
-        identifier = match.group(1)
-        placeholder = f"__PLACEHOLDER_{placeholder_count[0]}__"
-        placeholder_map[placeholder] = identifier
-        identifiers.add(identifier)
-        placeholder_count[0] += 1
-        return placeholder
-
-    # Extract backtick-quoted identifiers
-    modified_sql = re.sub(r'`([^`]+)`', replace_with_placeholder, sql)
-
-    # Extract double-quoted identifiers (but not string literals in WHERE)
-    # Be careful to distinguish between column names and string values
-    modified_sql = re.sub(r'"([^"]+)"(?=\s*(?:,|\)|FROM|WHERE|AND|OR|ORDER|GROUP|HAVING|JOIN|ON|AS|=|!=|<|>|LIKE|IN|BETWEEN|$))',
-                          replace_with_placeholder, modified_sql, flags=re.IGNORECASE)
-
-    # Extract bracket-quoted identifiers [column name]
-    modified_sql = re.sub(r'\[([^\]]+)\]', replace_with_placeholder, sql)
-
-    return identifiers, modified_sql
-
-
-def extract_tables(sql: str) -> Set[str]:
-    """Extract table names from SQL query."""
-    tables = set()
+    alias_to_table = {}
+    tables = []
 
     # Normalize whitespace
     sql_normalized = ' '.join(sql.split())
 
-    # Pattern for FROM clause: FROM table_name [AS alias]
-    # Handle both simple table names and those followed by aliases
-    from_pattern = r'\bFROM\s+(\w+)(?:\s+(?:AS\s+)?(?:T\d+|\w+))?'
+    # Pattern for FROM clause: FROM table_name [AS] alias
+    # Matches: FROM district T1, FROM district AS T1, FROM district
+    from_pattern = r'\bFROM\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?'
     from_matches = re.findall(from_pattern, sql_normalized, re.IGNORECASE)
-    for table in from_matches:
-        if table.upper() not in TABLE_ALIASES and table.upper() not in SQL_KEYWORDS:
-            tables.add(table)
+    for match in from_matches:
+        table_name = match[0]
+        alias = match[1] if match[1] else None
+        if table_name.upper() not in SQL_KEYWORDS:
+            if table_name not in tables:
+                tables.append(table_name)
+            if alias:
+                alias_to_table[alias.upper()] = table_name
 
     # Pattern for JOIN clauses
-    join_pattern = r'\bJOIN\s+(\w+)(?:\s+(?:AS\s+)?(?:T\d+|\w+))?'
+    join_pattern = r'\bJOIN\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?'
     join_matches = re.findall(join_pattern, sql_normalized, re.IGNORECASE)
-    for table in join_matches:
-        if table.upper() not in TABLE_ALIASES and table.upper() not in SQL_KEYWORDS:
-            tables.add(table)
+    for match in join_matches:
+        table_name = match[0]
+        alias = match[1] if match[1] else None
+        if table_name.upper() not in SQL_KEYWORDS:
+            if table_name not in tables:
+                tables.append(table_name)
+            if alias:
+                alias_to_table[alias.upper()] = table_name
 
-    # Also handle comma-separated tables in FROM clause
-    # FROM table1, table2, table3 WHERE ...
-    from_clause_match = re.search(r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\b|\bGROUP\b|\bLIMIT\b|\bHAVING\b|$)',
-                                   sql_normalized, re.IGNORECASE)
+    # Handle comma-separated tables in FROM clause
+    from_clause_match = re.search(
+        r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\b|\bGROUP\b|\bLIMIT\b|\bHAVING\b|$)',
+        sql_normalized, re.IGNORECASE
+    )
     if from_clause_match:
         from_clause = from_clause_match.group(1)
-        # Split by comma and extract table names
         parts = from_clause.split(',')
         for part in parts:
             part = part.strip()
-            # Get first word (table name)
-            match = re.match(r'(\w+)', part)
+            # Match: table_name [AS] alias
+            match = re.match(r'(\w+)(?:\s+(?:AS\s+)?(\w+))?', part, re.IGNORECASE)
             if match:
-                table = match.group(1)
-                if table.upper() not in TABLE_ALIASES and table.upper() not in SQL_KEYWORDS:
-                    tables.add(table)
+                table_name = match.group(1)
+                alias = match.group(2) if match.group(2) else None
+                if table_name.upper() not in SQL_KEYWORDS:
+                    if table_name not in tables:
+                        tables.append(table_name)
+                    if alias:
+                        alias_to_table[alias.upper()] = table_name
 
-    return tables
+    return alias_to_table, tables
 
 
-def extract_columns(sql: str, tables: Set[str]) -> Set[str]:
-    """Extract column names from SQL query."""
-    columns = set()
+def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables: List[str]) -> Dict[str, Set[str]]:
+    """
+    Extract columns and associate them with their respective tables.
 
-    # First, extract all quoted identifiers (these are likely column names)
-    quoted_identifiers, _ = extract_quoted_identifiers(sql)
-
-    # Add quoted identifiers that aren't tables
-    for identifier in quoted_identifiers:
-        if identifier not in tables and identifier.upper() not in SQL_KEYWORDS:
-            columns.add(identifier)
+    Returns:
+        Dictionary mapping table names to sets of column names
+    """
+    table_columns = defaultdict(set)
 
     # Normalize whitespace
     sql_normalized = ' '.join(sql.split())
 
-    # Extract columns from table.column or alias.column patterns
-    # Match: T1.column_name or table.column_name
-    table_col_pattern = r'(?:T\d+|\w+)\.([`"\[\]]?[\w]+[`"\]]?)'
-    table_col_matches = re.findall(table_col_pattern, sql_normalized)
-    for col in table_col_matches:
-        col = col.strip('`"[]')
+    # Extract all backtick-quoted identifiers
+    backtick_cols = re.findall(r'`([^`]+)`', sql)
+
+    # Extract columns with explicit table/alias prefix: T1.column or table.column
+    # Pattern matches: alias.column or alias.`column`
+    prefixed_pattern = r'\b(\w+)\.`?([^`\s,\(\)]+)`?'
+    prefixed_matches = re.findall(prefixed_pattern, sql_normalized)
+
+    for prefix, column in prefixed_matches:
+        column = column.strip('`"[]')
+        if column.upper() in SQL_KEYWORDS:
+            continue
+
+        # Resolve alias to table name
+        table_name = alias_to_table.get(prefix.upper(), prefix)
+
+        # Only add if table_name is in our tables list
+        if table_name in tables:
+            table_columns[table_name].add(column)
+        elif prefix in tables:
+            table_columns[prefix].add(column)
+
+    # For backtick columns without prefix, try to associate with tables
+    # These are columns that appear without a table prefix
+    for col in backtick_cols:
         if col.upper() not in SQL_KEYWORDS and col not in tables:
-            columns.add(col)
+            # Check if this column was already assigned to a table
+            already_assigned = any(col in cols for cols in table_columns.values())
+            if not already_assigned:
+                # If only one table, assign to it
+                if len(tables) == 1:
+                    table_columns[tables[0]].add(col)
+                else:
+                    # Try to find context clues from the SQL
+                    # For now, assign to first table if we can't determine
+                    if tables:
+                        table_columns[tables[0]].add(col)
 
-    # Extract simple column names from SELECT clause
-    select_match = re.search(r'\bSELECT\s+(.*?)\s+FROM\b', sql_normalized, re.IGNORECASE)
-    if select_match:
-        select_clause = select_match.group(1)
-        # Remove DISTINCT keyword
-        select_clause = re.sub(r'\bDISTINCT\s+', '', select_clause, flags=re.IGNORECASE)
+    # Extract simple columns from various clauses and try to associate them
+    # Look for patterns like: WHERE column = or ORDER BY column
+    simple_col_contexts = [
+        (r'\bWHERE\s+(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)', 'where'),
+        (r'\bORDER\s+BY\s+(\w+)', 'order'),
+        (r'\bGROUP\s+BY\s+(\w+)', 'group'),
+    ]
 
-        # Find simple column references (not in function calls)
-        simple_cols = re.findall(r'\b([a-zA-Z_]\w*)\b', select_clause)
-        for col in simple_cols:
-            if (col.upper() not in SQL_KEYWORDS and
-                col not in tables and
-                col.upper() not in TABLE_ALIASES and
-                not col.startswith('T') or len(col) > 2):  # Skip T1, T2, etc.
-                columns.add(col)
+    for pattern, context in simple_col_contexts:
+        matches = re.findall(pattern, sql_normalized, re.IGNORECASE)
+        for col in matches:
+            if col.upper() not in SQL_KEYWORDS and col not in tables:
+                # Check if already assigned
+                already_assigned = any(col in cols for cols in table_columns.values())
+                if not already_assigned and tables:
+                    # Assign to first table as default
+                    table_columns[tables[0]].add(col)
 
-    # Extract columns from WHERE clause
-    where_match = re.search(r'\bWHERE\s+(.*?)(?:\bGROUP\b|\bORDER\b|\bLIMIT\b|\bHAVING\b|$)',
-                            sql_normalized, re.IGNORECASE)
-    if where_match:
-        where_clause = where_match.group(1)
-        # Find column references before operators
-        col_pattern = r'\b([a-zA-Z_]\w*)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)'
-        col_matches = re.findall(col_pattern, where_clause, re.IGNORECASE)
-        for col in col_matches:
-            if (col.upper() not in SQL_KEYWORDS and
-                col not in tables and
-                col.upper() not in TABLE_ALIASES):
-                columns.add(col)
-
-    # Extract columns from GROUP BY clause
-    groupby_match = re.search(r'\bGROUP\s+BY\s+(.*?)(?:\bHAVING\b|\bORDER\b|\bLIMIT\b|$)',
-                              sql_normalized, re.IGNORECASE)
-    if groupby_match:
-        groupby_clause = groupby_match.group(1)
-        cols = re.findall(r'\b([a-zA-Z_]\w*)\b', groupby_clause)
-        for col in cols:
-            if (col.upper() not in SQL_KEYWORDS and
-                col not in tables and
-                col.upper() not in TABLE_ALIASES):
-                columns.add(col)
-
-    # Extract columns from ORDER BY clause
-    orderby_match = re.search(r'\bORDER\s+BY\s+(.*?)(?:\bLIMIT\b|\bOFFSET\b|$)',
-                              sql_normalized, re.IGNORECASE)
-    if orderby_match:
-        orderby_clause = orderby_match.group(1)
-        cols = re.findall(r'\b([a-zA-Z_]\w*)\b', orderby_clause)
-        for col in cols:
-            if (col.upper() not in SQL_KEYWORDS and
-                col not in tables and
-                col.upper() not in TABLE_ALIASES):
-                columns.add(col)
-
-    # Extract columns from ON clause (JOINs)
-    on_matches = re.findall(r'\bON\s+(.*?)(?:\bWHERE\b|\bGROUP\b|\bORDER\b|\bLIMIT\b|\bJOIN\b|$)',
-                            sql_normalized, re.IGNORECASE)
-    for on_clause in on_matches:
-        cols = re.findall(r'\b([a-zA-Z_]\w*)\s*=', on_clause)
-        cols += re.findall(r'=\s*\b([a-zA-Z_]\w*)\b', on_clause)
-        for col in cols:
-            if (col.upper() not in SQL_KEYWORDS and
-                col not in tables and
-                col.upper() not in TABLE_ALIASES):
-                columns.add(col)
-
-    # Clean up - remove table aliases like T1, T2, etc.
-    columns = {c for c in columns if not re.match(r'^T\d+$', c, re.IGNORECASE)}
-
-    return columns
+    return table_columns
 
 
-def extract_tables_and_columns(sql: str) -> Tuple[List[str], List[str]]:
+def extract_tables_with_columns(sql: str) -> List[Dict]:
     """
-    Extract table names and column names from a SQL query.
+    Extract tables with their nested columns from a SQL query.
 
     Args:
         sql: The SQL query string
 
     Returns:
-        Tuple of (tables list, columns list)
+        List of table objects with nested columns:
+        [{"name": "table", "columns": [{"name": "col1"}, {"name": "col2"}]}]
     """
-    tables = extract_tables(sql)
-    columns = extract_columns(sql, tables)
+    # Extract tables and their aliases
+    alias_to_table, tables = extract_tables_with_aliases(sql)
 
-    # Final cleanup - ensure columns don't include tables
-    columns = columns - tables
+    # Extract columns for each table
+    table_columns = extract_columns_for_tables(sql, alias_to_table, tables)
 
-    # Filter out any remaining keywords or aliases
-    filtered_columns = set()
-    for col in columns:
-        if (col.upper() not in SQL_KEYWORDS and
-            col.upper() not in TABLE_ALIASES and
-            len(col) > 0 and
-            not col.isdigit()):
-            filtered_columns.add(col)
+    # Build the result structure
+    result = []
+    for table_name in tables:
+        columns = table_columns.get(table_name, set())
+        # Filter out any remaining keywords
+        filtered_columns = [
+            col for col in sorted(columns)
+            if col.upper() not in SQL_KEYWORDS
+            and not col.isdigit()
+            and len(col) > 0
+        ]
 
-    return sorted(list(tables)), sorted(list(filtered_columns))
+        table_obj = {
+            "name": table_name,
+            "columns": [{"name": col} for col in filtered_columns]
+        }
+        result.append(table_obj)
+
+    return result
 
 
 def process_dev_file(input_path: str, output_path: str) -> None:
     """
-    Process the dev.json file and add tables and columns metadata.
+    Process the dev.json file and add tables with nested columns metadata.
 
     Args:
         input_path: Path to input dev.json file
@@ -267,10 +243,8 @@ def process_dev_file(input_path: str, output_path: str) -> None:
 
     for i, question in enumerate(questions):
         sql = question.get('SQL', '')
-        tables, columns = extract_tables_and_columns(sql)
-
-        question['tables'] = tables
-        question['columns'] = columns
+        tables_with_columns = extract_tables_with_columns(sql)
+        question['tables'] = tables_with_columns
 
         if (i + 1) % 100 == 0:
             print(f"  Processed {i + 1} questions...")
@@ -284,7 +258,10 @@ def process_dev_file(input_path: str, output_path: str) -> None:
 
     # Print some statistics
     total_tables = sum(len(q.get('tables', [])) for q in questions)
-    total_columns = sum(len(q.get('columns', [])) for q in questions)
+    total_columns = sum(
+        sum(len(t.get('columns', [])) for t in q.get('tables', []))
+        for q in questions
+    )
     print(f"\nStatistics:")
     print(f"  Total questions: {len(questions)}")
     print(f"  Total table references: {total_tables}")
