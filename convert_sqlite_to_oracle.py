@@ -396,9 +396,13 @@ def convert_constraint_to_oracle(constraint: str, table_name: str) -> str:
     return constraint
 
 
-def convert_table_to_oracle(parsed_table: Dict) -> str:
-    """Convert a parsed table to Oracle DDL."""
-    table_name = quote_identifier(parsed_table['table_name'])
+def convert_table_to_oracle(parsed_table: Dict) -> Tuple[str, List[Tuple[str, str, str]]]:
+    """Convert a parsed table to Oracle DDL.
+
+    Returns the table DDL and a list of deferred foreign key constraints.
+    """
+    table_name_raw = parsed_table['table_name']
+    table_name = quote_identifier(table_name_raw)
     columns = parsed_table['columns']
     constraints = parsed_table['constraints']
 
@@ -408,7 +412,7 @@ def convert_table_to_oracle(parsed_table: Dict) -> str:
 
     col_defs = []
     pk_columns = []
-    inline_fk_constraints = []
+    deferred_fk_constraints: List[Tuple[str, str, str]] = []
 
     for col in columns:
         col_name = quote_identifier(col['name'])
@@ -447,13 +451,12 @@ def convert_table_to_oracle(parsed_table: Dict) -> str:
         if col['is_pk']:
             pk_columns.append(col_name)
 
-        # Handle inline REFERENCES
+        # Handle inline REFERENCES by deferring the FK constraint
         if col['references']:
             ref_table = quote_identifier(col['references']['table'])
             ref_col = quote_identifier(col['references']['column'])
-            inline_fk_constraints.append(
-                f"    FOREIGN KEY ({col_name}) REFERENCES {ref_table} ({ref_col})"
-            )
+            fk_clause = f"FOREIGN KEY ({col_name}) REFERENCES {ref_table} ({ref_col})"
+            deferred_fk_constraints.append((table_name, table_name_raw, fk_clause))
 
         col_defs.append(" ".join(parts))
 
@@ -465,21 +468,21 @@ def convert_table_to_oracle(parsed_table: Dict) -> str:
         lines[-1] += ","
         lines.append(f"    PRIMARY KEY ({', '.join(pk_columns)})")
 
-    # Add inline foreign key constraints
-    for fk in inline_fk_constraints:
-        lines[-1] += ","
-        lines.append(fk)
-
-    # Add table-level constraints
+    # Add table-level constraints, deferring foreign keys
     for constraint in constraints:
         oracle_constraint = convert_constraint_to_oracle(constraint, parsed_table['table_name'])
-        if oracle_constraint:
+        if not oracle_constraint:
+            continue
+
+        if oracle_constraint.upper().startswith('FOREIGN KEY'):
+            deferred_fk_constraints.append((table_name, table_name_raw, oracle_constraint))
+        else:
             lines[-1] += ","
             lines.append(f"    {oracle_constraint}")
 
     lines.append(");")
 
-    return "\n".join(lines)
+    return "\n".join(lines), deferred_fk_constraints
 
 
 def extract_schema_from_sqlite(db_path: str) -> List[str]:
@@ -506,6 +509,7 @@ def convert_database(db_path: str, output_path: str) -> bool:
         schemas = extract_schema_from_sqlite(db_path)
 
         oracle_ddls = []
+        deferred_foreign_keys: List[Tuple[str, str, str]] = []
         oracle_ddls.append(f"-- Oracle DDL for {os.path.basename(db_path)}")
         oracle_ddls.append(f"-- Converted from SQLite schema")
         oracle_ddls.append("")
@@ -513,9 +517,29 @@ def convert_database(db_path: str, output_path: str) -> bool:
         for schema in schemas:
             parsed = parse_create_table(schema)
             if parsed:
-                oracle_ddl = convert_table_to_oracle(parsed)
+                oracle_ddl, table_fks = convert_table_to_oracle(parsed)
                 oracle_ddls.append(oracle_ddl)
                 oracle_ddls.append("")
+                deferred_foreign_keys.extend(table_fks)
+
+        if deferred_foreign_keys:
+            oracle_ddls.append("-- Deferred foreign key constraints")
+            fk_counts: Dict[str, int] = {}
+
+            for table_name, raw_table_name, fk_clause in deferred_foreign_keys:
+                key = raw_table_name.upper()
+                fk_counts[key] = fk_counts.get(key, 0) + 1
+                index = fk_counts[key]
+
+                sanitized_name = re.sub(r'[^A-Z0-9_]', '_', key)
+                constraint_name = f"FK_{sanitized_name}_{index}"
+                if len(constraint_name) > 30:
+                    constraint_name = constraint_name[:29] + str(index % 10)
+
+                oracle_ddls.append(
+                    f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {fk_clause};"
+                )
+            oracle_ddls.append("")
 
         # Write to output file
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

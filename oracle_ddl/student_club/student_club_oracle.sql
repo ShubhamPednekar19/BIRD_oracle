@@ -5,9 +5,7 @@ CREATE TABLE attendance
 (
     link_to_event VARCHAR2(4000),
     link_to_member VARCHAR2(4000),
-    PRIMARY KEY (link_to_event, link_to_member),
-    FOREIGN KEY (link_to_event) REFERENCES "event" (event_id),
-    FOREIGN KEY (link_to_member) REFERENCES "member" (member_id)
+    PRIMARY KEY (link_to_event, link_to_member)
 );
 
 CREATE TABLE budget
@@ -19,8 +17,7 @@ CREATE TABLE budget
     amount NUMBER,
     event_status VARCHAR2(4000),
     link_to_event VARCHAR2(4000),
-    PRIMARY KEY (budget_id),
-    FOREIGN KEY (link_to_event) REFERENCES "event" (event_id)
+    PRIMARY KEY (budget_id)
 );
 
 CREATE TABLE "event"
@@ -44,9 +41,7 @@ CREATE TABLE expense
     approved VARCHAR2(4000),
     link_to_member VARCHAR2(4000),
     link_to_budget VARCHAR2(4000),
-    PRIMARY KEY (expense_id),
-    FOREIGN KEY (link_to_budget) REFERENCES budget (budget_id),
-    FOREIGN KEY (link_to_member) REFERENCES "member" (member_id)
+    PRIMARY KEY (expense_id)
 );
 
 CREATE TABLE income
@@ -57,8 +52,7 @@ CREATE TABLE income
     source VARCHAR2(4000),
     notes VARCHAR2(4000),
     link_to_member VARCHAR2(4000),
-    PRIMARY KEY (income_id),
-    FOREIGN KEY (link_to_member) REFERENCES "member" (member_id)
+    PRIMARY KEY (income_id)
 );
 
 CREATE TABLE major
@@ -81,9 +75,7 @@ CREATE TABLE "member"
     phone VARCHAR2(4000),
     zip NUMBER,
     link_to_major VARCHAR2(4000),
-    PRIMARY KEY (member_id),
-    FOREIGN KEY (link_to_major) REFERENCES major (major_id),
-    FOREIGN KEY (zip) REFERENCES zip_code (zip_code)
+    PRIMARY KEY (member_id)
 );
 
 CREATE TABLE zip_code
@@ -96,3 +88,13 @@ CREATE TABLE zip_code
     short_state VARCHAR2(4000),
     PRIMARY KEY (zip_code)
 );
+
+-- Deferred foreign key constraints
+ALTER TABLE attendance ADD CONSTRAINT FK_ATTENDANCE_1 FOREIGN KEY (link_to_event) REFERENCES "event" (event_id);
+ALTER TABLE attendance ADD CONSTRAINT FK_ATTENDANCE_2 FOREIGN KEY (link_to_member) REFERENCES "member" (member_id);
+ALTER TABLE budget ADD CONSTRAINT FK_BUDGET_1 FOREIGN KEY (link_to_event) REFERENCES "event" (event_id);
+ALTER TABLE expense ADD CONSTRAINT FK_EXPENSE_1 FOREIGN KEY (link_to_budget) REFERENCES budget (budget_id);
+ALTER TABLE expense ADD CONSTRAINT FK_EXPENSE_2 FOREIGN KEY (link_to_member) REFERENCES "member" (member_id);
+ALTER TABLE income ADD CONSTRAINT FK_INCOME_1 FOREIGN KEY (link_to_member) REFERENCES "member" (member_id);
+ALTER TABLE "member" ADD CONSTRAINT FK_MEMBER_1 FOREIGN KEY (link_to_major) REFERENCES major (major_id);
+ALTER TABLE "member" ADD CONSTRAINT FK_MEMBER_2 FOREIGN KEY (zip) REFERENCES zip_code (zip_code);
