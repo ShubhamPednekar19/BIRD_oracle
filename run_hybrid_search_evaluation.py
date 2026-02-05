@@ -950,8 +950,45 @@ def main():
         nargs='*',
         help='Specific databases to process (default: all)'
     )
+    parser.add_argument(
+        '--test', '-t',
+        action='store_true',
+        help='Run in test mode: 2 databases, 5 questions each'
+    )
+    parser.add_argument(
+        '--max-questions', '-q',
+        type=int,
+        default=None,
+        help='Maximum questions per database (default: all)'
+    )
+    parser.add_argument(
+        '--max-databases', '-n',
+        type=int,
+        default=None,
+        help='Maximum number of databases to process (default: all)'
+    )
 
     args = parser.parse_args()
+
+    # Apply test mode defaults
+    if args.test:
+        print("\n" + "="*60)
+        print("RUNNING IN TEST MODE")
+        print("="*60)
+        if args.max_databases is None:
+            args.max_databases = 2
+        if args.max_questions is None:
+            args.max_questions = 5
+        # Use test output files
+        if args.output == OUTPUT_CSV:
+            args.output = "test_" + OUTPUT_CSV
+        if args.summary == SUMMARY_CSV:
+            args.summary = "test_" + SUMMARY_CSV
+        print(f"  Max databases: {args.max_databases}")
+        print(f"  Max questions per db: {args.max_questions}")
+        print(f"  Output file: {args.output}")
+        print(f"  Summary file: {args.summary}")
+        print("="*60 + "\n")
 
     # Validate paths
     if not os.path.isdir(args.ddl_dir):
@@ -974,6 +1011,10 @@ def main():
     if args.databases:
         ddl_folders = [d for d in ddl_folders if d in args.databases]
 
+    # Apply max_databases limit
+    if args.max_databases is not None:
+        ddl_folders = sorted(ddl_folders)[:args.max_databases]
+
     print(f"Will process {len(ddl_folders)} databases: {', '.join(ddl_folders)}")
 
     # Initialize Oracle manager
@@ -994,6 +1035,10 @@ def main():
             if not questions:
                 print(f"\nSkipping {db_id}: No questions found")
                 continue
+
+            # Apply max_questions limit
+            if args.max_questions is not None:
+                questions = questions[:args.max_questions]
 
             results, summary = process_database(
                 oracle_mgr, db_id, ddl_folder, questions, args.index_script
