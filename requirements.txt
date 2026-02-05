@@ -1,0 +1,10 @@
+# Oracle Hybrid Search Evaluation Dependencies
+
+# Oracle Database connectivity
+oracledb>=2.0.0
+
+# JSON processing (built-in, but listed for reference)
+# json - standard library
+
+# CSV processing (built-in, but listed for reference)
+# csv - standard library

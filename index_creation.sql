@@ -1,0 +1,32 @@
+-------------------------------------------------------------------------------
+-- PACKAGE: DEVELOPER
+--
+-- PURPOSE:
+--   Utility package for metadata discovery using Hybrid Vector Search.
+--   It maintains object/column metadata tables and exposes an NL-query API
+--   that returns ranked objects and matched columns as JSON.
+--
+-- NOTE: This is a placeholder file. The actual implementation will be
+--       pushed separately by the user.
+--
+-- SECURITY / EXECUTION:
+--   Recommended to be created in an application schema and granted to callers.
+--   Runs with INVOKER'S RIGHTS (AUTHID CURRENT_USER) so it uses the caller's
+--   privileges and schema visibility at runtime.
+--
+-- TABLES USED:
+--   ALL_OBJECTS_SEARCH_TEXT  - Object-level metadata search corpus
+--   ALL_COLS_SEARCH_TEXT     - Column-level metadata search corpus
+--
+-- INDEXES USED:
+--   OBJ_DISCOVERY_HVIX       - Hybrid vector index on ALL_OBJECTS_SEARCH_TEXT
+--   COL_DISCOVERY_HVIX       - Hybrid vector index on ALL_COLS_SEARCH_TEXT
+-------------------------------------------------------------------------------
+
+-- Placeholder: Replace this file with the actual index_creation.sql
+-- The package should implement:
+--   - developer.refresh_data(p_table_name IN VARCHAR2 DEFAULT NULL)
+--   - developer.setup_hybrid_search(...)
+--   - developer.discover_objects(p_query, p_k, p_k0, p_n, p_cols_per_obj, p_alpha, p_result_json OUT JSON)
+
+SELECT 'index_creation.sql placeholder - replace with actual implementation' FROM DUAL;
