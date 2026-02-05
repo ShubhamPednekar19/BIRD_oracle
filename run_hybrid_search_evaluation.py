@@ -356,13 +356,40 @@ class OracleManager:
             with open(script_path, 'r', encoding='utf-8') as f:
                 sql_content = f.read()
 
+            # Check if this is a placeholder file
+            if 'placeholder' in sql_content.lower() and 'CREATE OR REPLACE PACKAGE' not in sql_content.upper():
+                print(f"  Warning: {script_path} appears to be a placeholder file")
+                print(f"  Please replace with actual developer package implementation")
+                print(f"  Skipping package creation...")
+                return False
+
             cursor = self.user_connection.cursor()
 
-            # Execute the entire package creation as one statement
-            # PL/SQL packages need to be executed differently
-            cursor.execute(sql_content)
-            self.user_connection.commit()
+            # Split PL/SQL content by '/' delimiter (standard for PL/SQL scripts)
+            # Each block (package spec, package body) is typically separated by '/'
+            blocks = sql_content.split('\n/\n')
 
+            for block in blocks:
+                block = block.strip()
+                if block and not block.startswith('--'):
+                    # Skip pure comment blocks or empty blocks
+                    # Check if it's a PL/SQL block or regular SQL
+                    if any(kw in block.upper() for kw in ['CREATE OR REPLACE PACKAGE',
+                                                           'CREATE OR REPLACE PROCEDURE',
+                                                           'CREATE OR REPLACE FUNCTION',
+                                                           'BEGIN', 'DECLARE']):
+                        cursor.execute(block)
+                    elif block.strip().upper().startswith('SELECT'):
+                        # Skip standalone SELECT statements (likely placeholders)
+                        continue
+                    else:
+                        # Try to execute as regular SQL
+                        try:
+                            cursor.execute(block)
+                        except oracledb.DatabaseError:
+                            pass  # Ignore errors for non-essential statements
+
+            self.user_connection.commit()
             print(f"    Executed index creation script")
             return True
 
@@ -381,8 +408,12 @@ class OracleManager:
             self.user_connection.commit()
             print(f"    Called developer.refresh_data()")
             return True
-        except Exception as e:
-            print(f"Error calling refresh_data: {e}")
+        except oracledb.DatabaseError as e:
+            error_obj, = e.args
+            if 'PLS-00201' in str(error_obj):
+                print(f"  Skipping refresh_data: developer package not installed")
+            else:
+                print(f"Error calling refresh_data: {e}")
             return False
 
     def call_setup_hybrid_search(self) -> bool:
@@ -396,8 +427,12 @@ class OracleManager:
             self.user_connection.commit()
             print(f"    Called developer.setup_hybrid_search()")
             return True
-        except Exception as e:
-            print(f"Error calling setup_hybrid_search: {e}")
+        except oracledb.DatabaseError as e:
+            error_obj, = e.args
+            if 'PLS-00201' in str(error_obj):
+                print(f"  Skipping setup_hybrid_search: developer package not installed")
+            else:
+                print(f"Error calling setup_hybrid_search: {e}")
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
