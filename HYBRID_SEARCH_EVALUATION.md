@@ -109,19 +109,35 @@ Per-query detailed results:
 | `db_id` | Database identifier |
 | `question` | Natural language query |
 | `execution_time_ms` | Query execution time in milliseconds |
+| `num_expected_tables` | Number of expected tables |
+| `num_expected_columns` | Number of expected columns |
 | `expected_tables` | Expected table names (pipe-separated) |
 | `expected_columns` | Expected column names (pipe-separated) |
 | `discovered_tables` | Discovered table names (pipe-separated) |
 | `discovered_columns` | Discovered column names (pipe-separated) |
+| **Basic Metrics** | |
 | `table_precision` | Precision for table discovery |
 | `table_recall` | Recall for table discovery |
 | `table_f1` | F1 score for table discovery |
 | `column_precision` | Precision for column discovery |
 | `column_recall` | Recall for column discovery |
 | `column_f1` | F1 score for column discovery |
-| `table_hit_at_1` | True if correct table in top-1 |
-| `table_hit_at_3` | True if correct table in top-3 |
-| `table_hit_at_5` | True if correct table in top-5 |
+| **Hit@K (Binary)** | |
+| `table_hit_at_1` | True if any expected table in top-1 |
+| `table_hit_at_3` | True if any expected table in top-3 |
+| `table_hit_at_5` | True if any expected table in top-5 |
+| **Recall@K (Fraction)** | Better for multi-table queries |
+| `table_recall_at_3` | Fraction of expected tables in top-3 |
+| `table_recall_at_5` | Fraction of expected tables in top-5 |
+| `table_recall_at_10` | Fraction of expected tables in top-10 |
+| **Advanced Metrics** | |
+| `table_mrr` | Mean Reciprocal Rank for tables |
+| `table_jaccard` | Jaccard similarity for tables |
+| `table_exact_match` | True if discovered = expected exactly |
+| **Joint Table-Column Metrics** | |
+| `joint_column_precision` | Column precision (only if table found) |
+| `joint_column_recall` | Column recall (only if table found) |
+| `joint_column_f1` | Column F1 (only if table found) |
 | `error` | Error message if query failed |
 
 ### Summary CSV (`hybrid_search_evaluation_summary.csv`)
@@ -135,15 +151,29 @@ Per-database aggregated metrics:
 | `successful_queries` | Queries that completed successfully |
 | `failed_queries` | Queries that failed |
 | `avg_execution_time_ms` | Average execution time |
+| **Basic Metrics** | |
 | `avg_table_precision` | Average table precision |
 | `avg_table_recall` | Average table recall |
 | `avg_table_f1` | Average table F1 score |
 | `avg_column_precision` | Average column precision |
 | `avg_column_recall` | Average column recall |
 | `avg_column_f1` | Average column F1 score |
+| **Hit@K Rates (Binary)** | |
 | `table_hit_at_1_rate` | Hit@1 rate for tables |
 | `table_hit_at_3_rate` | Hit@3 rate for tables |
 | `table_hit_at_5_rate` | Hit@5 rate for tables |
+| **Recall@K Averages (Fraction)** | Better for multi-table queries |
+| `avg_table_recall_at_3` | Average Recall@3 for tables |
+| `avg_table_recall_at_5` | Average Recall@5 for tables |
+| `avg_table_recall_at_10` | Average Recall@10 for tables |
+| **Advanced Metrics** | |
+| `avg_table_mrr` | Average MRR for tables |
+| `avg_table_jaccard` | Average Jaccard similarity |
+| `table_exact_match_rate` | Rate of exact table matches |
+| **Joint Table-Column Metrics** | |
+| `avg_joint_column_precision` | Average joint column precision |
+| `avg_joint_column_recall` | Average joint column recall |
+| `avg_joint_column_f1` | Average joint column F1 |
 
 ## Evaluation Metrics
 
@@ -159,13 +189,58 @@ Recall = True Positives / (True Positives + False Negatives)
 F1 = 2 * (Precision * Recall) / (Precision + Recall)
 ```
 
-### Hit@K
+### Hit@K (Binary)
 
-Measures if at least one expected table appears in the top-K results:
+Measures if **at least one** expected table appears in the top-K results:
 
-- **Hit@1**: Correct table is the top result
-- **Hit@3**: Correct table is in top 3 results
-- **Hit@5**: Correct table is in top 5 results
+- **Hit@1**: At least one correct table is the top result
+- **Hit@3**: At least one correct table is in top 3 results
+- **Hit@5**: At least one correct table is in top 5 results
+
+*Note: Hit@K is binary (0 or 1) and may overestimate performance for multi-table queries.*
+
+### Recall@K (Fraction)
+
+Measures **what fraction** of expected tables appear in the top-K results. Better for multi-table scenarios:
+
+- **Recall@3**: Fraction of expected tables found in top 3
+- **Recall@5**: Fraction of expected tables found in top 5
+- **Recall@10**: Fraction of expected tables found in top 10
+
+*Example: If 3 tables expected and 2 found in top-5, Recall@5 = 0.67*
+
+### Mean Reciprocal Rank (MRR)
+
+MRR = 1/rank of first correct result. Higher is better.
+
+- If first expected table is at rank 1: MRR = 1.0
+- If first expected table is at rank 2: MRR = 0.5
+- If first expected table is at rank 5: MRR = 0.2
+
+### Jaccard Similarity
+
+Measures overall set similarity between expected and discovered:
+
+```
+Jaccard = |expected ∩ discovered| / |expected ∪ discovered|
+```
+
+### Exact Match
+
+True only if discovered tables exactly match expected tables (no extra, no missing).
+
+### Joint Table-Column Metrics
+
+A column is only considered "correct" if its parent table was also discovered. This preserves the table-column relationship:
+
+- **Joint Precision**: Columns found correctly / Total columns discovered (in found tables)
+- **Joint Recall**: Columns found correctly / Total columns expected
+- **Joint F1**: Harmonic mean of joint precision and recall
+
+*Example: If query expects Table A with columns X, Y and Table B with column Z, but only Table A is discovered with columns X, W:*
+- *True Positives: 1 (column X from Table A)*
+- *Joint Precision: 1/2 = 0.5 (X is correct, W is not expected)*
+- *Joint Recall: 1/3 = 0.33 (only X found out of X, Y, Z)*
 
 ## Developer Package Interface
 

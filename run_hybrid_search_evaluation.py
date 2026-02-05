@@ -100,12 +100,14 @@ class EvaluationResult:
     # Expected from dev_with_metadata.json
     expected_tables: List[str] = field(default_factory=list)
     expected_columns: List[str] = field(default_factory=list)
+    num_expected_tables: int = 0
+    num_expected_columns: int = 0
 
     # Discovered by hybrid search
     discovered_tables: List[str] = field(default_factory=list)
     discovered_columns: List[str] = field(default_factory=list)
 
-    # Metrics
+    # Basic Metrics (Precision, Recall, F1)
     table_precision: float = 0.0
     table_recall: float = 0.0
     table_f1: float = 0.0
@@ -113,10 +115,23 @@ class EvaluationResult:
     column_recall: float = 0.0
     column_f1: float = 0.0
 
-    # Top-k metrics
+    # Top-k metrics (binary: any expected in top-k?)
     table_hit_at_1: bool = False
     table_hit_at_3: bool = False
     table_hit_at_5: bool = False
+
+    # Advanced Metrics for multi-table scenarios
+    table_recall_at_3: float = 0.0   # Fraction of expected tables in top-3
+    table_recall_at_5: float = 0.0   # Fraction of expected tables in top-5
+    table_recall_at_10: float = 0.0  # Fraction of expected tables in top-10
+    table_mrr: float = 0.0           # Mean Reciprocal Rank
+    table_exact_match: bool = False  # All expected tables found (no more, no less)
+    table_jaccard: float = 0.0       # Jaccard similarity
+
+    # Table-Column Joint Metrics (column correct only if table also found)
+    joint_column_precision: float = 0.0
+    joint_column_recall: float = 0.0
+    joint_column_f1: float = 0.0
 
     error: Optional[str] = None
 
@@ -130,13 +145,26 @@ class DatabaseSummary:
     failed_queries: int = 0
     avg_execution_time_ms: float = 0.0
 
-    # Aggregate metrics
+    # Basic aggregate metrics
     avg_table_precision: float = 0.0
     avg_table_recall: float = 0.0
     avg_table_f1: float = 0.0
     avg_column_precision: float = 0.0
     avg_column_recall: float = 0.0
     avg_column_f1: float = 0.0
+
+    # Advanced aggregate metrics
+    avg_table_recall_at_3: float = 0.0
+    avg_table_recall_at_5: float = 0.0
+    avg_table_recall_at_10: float = 0.0
+    avg_table_mrr: float = 0.0
+    table_exact_match_rate: float = 0.0
+    avg_table_jaccard: float = 0.0
+
+    # Joint metrics
+    avg_joint_column_precision: float = 0.0
+    avg_joint_column_recall: float = 0.0
+    avg_joint_column_f1: float = 0.0
 
     # Hit rates
     table_hit_at_1_rate: float = 0.0
@@ -565,6 +593,155 @@ def calculate_hit_at_k(expected: Set[str], discovered: List[str], k: int) -> boo
     return len(expected_lower & set(top_k)) > 0
 
 
+def calculate_recall_at_k(expected: Set[str], discovered: List[str], k: int) -> float:
+    """
+    Calculate what fraction of expected items appear in top-k discovered items.
+
+    This is more informative than Hit@K for multi-table scenarios.
+    E.g., if 3 tables expected and 2 found in top-5, recall@5 = 0.67
+
+    Args:
+        expected: Set of expected items
+        discovered: List of discovered items (in ranked order)
+        k: Number of top items to consider
+
+    Returns:
+        Fraction of expected items found in top-k (0.0 to 1.0)
+    """
+    if not expected:
+        return 1.0  # No expected items means perfect recall
+
+    expected_lower = {e.lower() for e in expected}
+    top_k_lower = {d.lower() for d in discovered[:k]}
+
+    found = len(expected_lower & top_k_lower)
+    return found / len(expected_lower)
+
+
+def calculate_mrr(expected: Set[str], discovered: List[str]) -> float:
+    """
+    Calculate Mean Reciprocal Rank.
+
+    MRR = 1/rank of first correct result. Higher is better.
+    If query needs tables A, B, C and we return [X, A, Y, B, C],
+    MRR = 1/2 = 0.5 (A is at rank 2)
+
+    Args:
+        expected: Set of expected items
+        discovered: List of discovered items (in ranked order)
+
+    Returns:
+        Reciprocal rank (0.0 if no match found)
+    """
+    expected_lower = {e.lower() for e in expected}
+
+    for rank, item in enumerate(discovered, start=1):
+        if item.lower() in expected_lower:
+            return 1.0 / rank
+
+    return 0.0
+
+
+def calculate_jaccard(expected: Set[str], discovered: Set[str]) -> float:
+    """
+    Calculate Jaccard similarity between expected and discovered sets.
+
+    Jaccard = |intersection| / |union|
+    Good for measuring overall set similarity.
+
+    Args:
+        expected: Set of expected items
+        discovered: Set of discovered items
+
+    Returns:
+        Jaccard similarity (0.0 to 1.0)
+    """
+    expected_lower = {e.lower() for e in expected}
+    discovered_lower = {d.lower() for d in discovered}
+
+    intersection = len(expected_lower & discovered_lower)
+    union = len(expected_lower | discovered_lower)
+
+    if union == 0:
+        return 1.0  # Both empty = perfect match
+
+    return intersection / union
+
+
+def calculate_exact_match(expected: Set[str], discovered: Set[str]) -> bool:
+    """
+    Check if discovered set exactly matches expected set.
+
+    Args:
+        expected: Set of expected items
+        discovered: Set of discovered items
+
+    Returns:
+        True if sets are identical (case-insensitive)
+    """
+    expected_lower = {e.lower() for e in expected}
+    discovered_lower = {d.lower() for d in discovered}
+
+    return expected_lower == discovered_lower
+
+
+def calculate_joint_column_metrics(
+    expected_tables: List['ExpectedObject'],
+    discovered: List['DiscoveredObject']
+) -> Tuple[float, float, float]:
+    """
+    Calculate column metrics where a column is only "correct" if its
+    parent table was also discovered.
+
+    This preserves the table-column relationship and gives more meaningful
+    metrics for multi-table queries.
+
+    Args:
+        expected_tables: List of expected table objects with columns
+        discovered: List of discovered objects with columns
+
+    Returns:
+        Tuple of (precision, recall, f1) for joint table-column matching
+    """
+    # Build a map of discovered table -> columns (lowercase)
+    discovered_table_cols = {}
+    for d in discovered:
+        table_lower = d.object_name.lower()
+        cols_lower = {col['name'].lower() for col in d.columns}
+        discovered_table_cols[table_lower] = cols_lower
+
+    # Count true positives: columns where both table and column match
+    true_positives = 0
+    total_expected = 0
+    total_discovered = 0
+
+    for exp_table in expected_tables:
+        table_lower = exp_table.table_name.lower()
+        exp_cols_lower = {c.lower() for c in exp_table.columns}
+        total_expected += len(exp_cols_lower)
+
+        if table_lower in discovered_table_cols:
+            disc_cols = discovered_table_cols[table_lower]
+            true_positives += len(exp_cols_lower & disc_cols)
+
+    # Total discovered columns (only from tables that were expected)
+    for exp_table in expected_tables:
+        table_lower = exp_table.table_name.lower()
+        if table_lower in discovered_table_cols:
+            total_discovered += len(discovered_table_cols[table_lower])
+
+    # Calculate metrics
+    precision = true_positives / total_discovered if total_discovered > 0 else 0.0
+    recall = true_positives / total_expected if total_expected > 0 else 0.0
+
+    if precision + recall > 0:
+        f1 = 2 * (precision * recall) / (precision + recall)
+    else:
+        f1 = 0.0
+
+    return precision, recall, f1
+
+
 def evaluate_result(expected_tables: List[ExpectedObject],
                    discovered: List[DiscoveredObject]) -> Dict:
     """
@@ -590,7 +767,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         for col in d.columns:
             discovered_column_names.add(col['name'])
 
-    # Calculate metrics
+    # Basic metrics (Precision, Recall, F1)
     table_p, table_r, table_f1 = calculate_precision_recall_f1(
         expected_table_names, set(discovered_table_names)
     )
@@ -599,23 +776,64 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         expected_column_names, discovered_column_names
     )
 
-    # Hit@k metrics
+    # Hit@k metrics (binary: any expected in top-k?)
     hit_at_1 = calculate_hit_at_k(expected_table_names, discovered_table_names, 1)
     hit_at_3 = calculate_hit_at_k(expected_table_names, discovered_table_names, 3)
     hit_at_5 = calculate_hit_at_k(expected_table_names, discovered_table_names, 5)
 
+    # Recall@k metrics (fraction of expected in top-k - better for multi-table)
+    recall_at_3 = calculate_recall_at_k(expected_table_names, discovered_table_names, 3)
+    recall_at_5 = calculate_recall_at_k(expected_table_names, discovered_table_names, 5)
+    recall_at_10 = calculate_recall_at_k(expected_table_names, discovered_table_names, 10)
+
+    # MRR (ranking quality)
+    mrr = calculate_mrr(expected_table_names, discovered_table_names)
+
+    # Jaccard similarity
+    jaccard = calculate_jaccard(expected_table_names, set(discovered_table_names))
+
+    # Exact match (strict evaluation)
+    exact_match = calculate_exact_match(expected_table_names, set(discovered_table_names))
+
+    # Joint table-column metrics (column correct only if table also found)
+    joint_col_p, joint_col_r, joint_col_f1 = calculate_joint_column_metrics(
+        expected_tables, discovered
+    )
+
     return {
+        # Basic metrics
         'table_precision': table_p,
         'table_recall': table_r,
         'table_f1': table_f1,
         'column_precision': col_p,
         'column_recall': col_r,
         'column_f1': col_f1,
+
+        # Hit@k (binary)
         'hit_at_1': hit_at_1,
         'hit_at_3': hit_at_3,
         'hit_at_5': hit_at_5,
+
+        # Recall@k (fraction - better for multi-table)
+        'recall_at_3': recall_at_3,
+        'recall_at_5': recall_at_5,
+        'recall_at_10': recall_at_10,
+
+        # Advanced metrics
+        'mrr': mrr,
+        'jaccard': jaccard,
+        'exact_match': exact_match,
+
+        # Joint table-column metrics
+        'joint_column_precision': joint_col_p,
+        'joint_column_recall': joint_col_r,
+        'joint_column_f1': joint_col_f1,
+
+        # Raw data
         'discovered_tables': discovered_table_names,
         'discovered_columns': list(discovered_column_names),
+        'num_expected_tables': len(expected_table_names),
+        'num_expected_columns': len(expected_column_names),
     }
 
 
@@ -676,11 +894,20 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
     """Write evaluation results to CSV."""
     fieldnames = [
         'question_id', 'db_id', 'question', 'execution_time_ms',
+        'num_expected_tables', 'num_expected_columns',
         'expected_tables', 'expected_columns',
         'discovered_tables', 'discovered_columns',
+        # Basic metrics
         'table_precision', 'table_recall', 'table_f1',
         'column_precision', 'column_recall', 'column_f1',
+        # Hit@k (binary)
         'table_hit_at_1', 'table_hit_at_3', 'table_hit_at_5',
+        # Recall@k (fraction - better for multi-table)
+        'table_recall_at_3', 'table_recall_at_5', 'table_recall_at_10',
+        # Advanced metrics
+        'table_mrr', 'table_jaccard', 'table_exact_match',
+        # Joint table-column metrics
+        'joint_column_precision', 'joint_column_recall', 'joint_column_f1',
         'error'
     ]
 
@@ -694,19 +921,35 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
                 'db_id': result.db_id,
                 'question': result.question[:200],  # Truncate long questions
                 'execution_time_ms': f"{result.execution_time_ms:.2f}",
+                'num_expected_tables': result.num_expected_tables,
+                'num_expected_columns': result.num_expected_columns,
                 'expected_tables': '|'.join(result.expected_tables),
                 'expected_columns': '|'.join(result.expected_columns[:10]),  # Limit
                 'discovered_tables': '|'.join(result.discovered_tables),
                 'discovered_columns': '|'.join(result.discovered_columns[:10]),
+                # Basic metrics
                 'table_precision': f"{result.table_precision:.4f}",
                 'table_recall': f"{result.table_recall:.4f}",
                 'table_f1': f"{result.table_f1:.4f}",
                 'column_precision': f"{result.column_precision:.4f}",
                 'column_recall': f"{result.column_recall:.4f}",
                 'column_f1': f"{result.column_f1:.4f}",
+                # Hit@k (binary)
                 'table_hit_at_1': result.table_hit_at_1,
                 'table_hit_at_3': result.table_hit_at_3,
                 'table_hit_at_5': result.table_hit_at_5,
+                # Recall@k (fraction)
+                'table_recall_at_3': f"{result.table_recall_at_3:.4f}",
+                'table_recall_at_5': f"{result.table_recall_at_5:.4f}",
+                'table_recall_at_10': f"{result.table_recall_at_10:.4f}",
+                # Advanced metrics
+                'table_mrr': f"{result.table_mrr:.4f}",
+                'table_jaccard': f"{result.table_jaccard:.4f}",
+                'table_exact_match': result.table_exact_match,
+                # Joint table-column metrics
+                'joint_column_precision': f"{result.joint_column_precision:.4f}",
+                'joint_column_recall': f"{result.joint_column_recall:.4f}",
+                'joint_column_f1': f"{result.joint_column_f1:.4f}",
                 'error': result.error or ''
             }
             writer.writerow(row)
@@ -719,9 +962,17 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
     fieldnames = [
         'db_id', 'total_questions', 'successful_queries', 'failed_queries',
         'avg_execution_time_ms',
+        # Basic metrics
         'avg_table_precision', 'avg_table_recall', 'avg_table_f1',
         'avg_column_precision', 'avg_column_recall', 'avg_column_f1',
-        'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate'
+        # Hit@k rates (binary)
+        'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate',
+        # Recall@k averages (fraction - better for multi-table)
+        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10',
+        # Advanced metrics
+        'avg_table_mrr', 'avg_table_jaccard', 'table_exact_match_rate',
+        # Joint table-column metrics
+        'avg_joint_column_precision', 'avg_joint_column_recall', 'avg_joint_column_f1'
     ]
 
     with open(filepath, 'w', newline='', encoding='utf-8') as f:
@@ -735,15 +986,29 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
                 'successful_queries': summary.successful_queries,
                 'failed_queries': summary.failed_queries,
                 'avg_execution_time_ms': f"{summary.avg_execution_time_ms:.2f}",
+                # Basic metrics
                 'avg_table_precision': f"{summary.avg_table_precision:.4f}",
                 'avg_table_recall': f"{summary.avg_table_recall:.4f}",
                 'avg_table_f1': f"{summary.avg_table_f1:.4f}",
                 'avg_column_precision': f"{summary.avg_column_precision:.4f}",
                 'avg_column_recall': f"{summary.avg_column_recall:.4f}",
                 'avg_column_f1': f"{summary.avg_column_f1:.4f}",
+                # Hit@k rates (binary)
                 'table_hit_at_1_rate': f"{summary.table_hit_at_1_rate:.4f}",
                 'table_hit_at_3_rate': f"{summary.table_hit_at_3_rate:.4f}",
                 'table_hit_at_5_rate': f"{summary.table_hit_at_5_rate:.4f}",
+                # Recall@k averages (fraction)
+                'avg_table_recall_at_3': f"{summary.avg_table_recall_at_3:.4f}",
+                'avg_table_recall_at_5': f"{summary.avg_table_recall_at_5:.4f}",
+                'avg_table_recall_at_10': f"{summary.avg_table_recall_at_10:.4f}",
+                # Advanced metrics
+                'avg_table_mrr': f"{summary.avg_table_mrr:.4f}",
+                'avg_table_jaccard': f"{summary.avg_table_jaccard:.4f}",
+                'table_exact_match_rate': f"{summary.table_exact_match_rate:.4f}",
+                # Joint table-column metrics
+                'avg_joint_column_precision': f"{summary.avg_joint_column_precision:.4f}",
+                'avg_joint_column_recall': f"{summary.avg_joint_column_recall:.4f}",
+                'avg_joint_column_f1': f"{summary.avg_joint_column_f1:.4f}",
             }
             writer.writerow(row)
 
@@ -760,16 +1025,36 @@ def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSu
     summary.failed_queries = len(results) - len(successful)
 
     if successful:
-        summary.avg_execution_time_ms = sum(r.execution_time_ms for r in successful) / len(successful)
-        summary.avg_table_precision = sum(r.table_precision for r in successful) / len(successful)
-        summary.avg_table_recall = sum(r.table_recall for r in successful) / len(successful)
-        summary.avg_table_f1 = sum(r.table_f1 for r in successful) / len(successful)
-        summary.avg_column_precision = sum(r.column_precision for r in successful) / len(successful)
-        summary.avg_column_recall = sum(r.column_recall for r in successful) / len(successful)
-        summary.avg_column_f1 = sum(r.column_f1 for r in successful) / len(successful)
-        summary.table_hit_at_1_rate = sum(1 for r in successful if r.table_hit_at_1) / len(successful)
-        summary.table_hit_at_3_rate = sum(1 for r in successful if r.table_hit_at_3) / len(successful)
-        summary.table_hit_at_5_rate = sum(1 for r in successful if r.table_hit_at_5) / len(successful)
+        n = len(successful)
+
+        # Basic metrics
+        summary.avg_execution_time_ms = sum(r.execution_time_ms for r in successful) / n
+        summary.avg_table_precision = sum(r.table_precision for r in successful) / n
+        summary.avg_table_recall = sum(r.table_recall for r in successful) / n
+        summary.avg_table_f1 = sum(r.table_f1 for r in successful) / n
+        summary.avg_column_precision = sum(r.column_precision for r in successful) / n
+        summary.avg_column_recall = sum(r.column_recall for r in successful) / n
+        summary.avg_column_f1 = sum(r.column_f1 for r in successful) / n
+
+        # Hit@k rates (binary)
+        summary.table_hit_at_1_rate = sum(1 for r in successful if r.table_hit_at_1) / n
+        summary.table_hit_at_3_rate = sum(1 for r in successful if r.table_hit_at_3) / n
+        summary.table_hit_at_5_rate = sum(1 for r in successful if r.table_hit_at_5) / n
+
+        # Recall@k averages (fraction - better for multi-table)
+        summary.avg_table_recall_at_3 = sum(r.table_recall_at_3 for r in successful) / n
+        summary.avg_table_recall_at_5 = sum(r.table_recall_at_5 for r in successful) / n
+        summary.avg_table_recall_at_10 = sum(r.table_recall_at_10 for r in successful) / n
+
+        # Advanced metrics
+        summary.avg_table_mrr = sum(r.table_mrr for r in successful) / n
+        summary.avg_table_jaccard = sum(r.table_jaccard for r in successful) / n
+        summary.table_exact_match_rate = sum(1 for r in successful if r.table_exact_match) / n
+
+        # Joint table-column metrics
+        summary.avg_joint_column_precision = sum(r.joint_column_precision for r in successful) / n
+        summary.avg_joint_column_recall = sum(r.joint_column_recall for r in successful) / n
+        summary.avg_joint_column_f1 = sum(r.joint_column_f1 for r in successful) / n
 
     return summary
 
@@ -853,7 +1138,9 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             question=question_text,
             execution_time_ms=0.0,
             expected_tables=expected_tables,
-            expected_columns=expected_columns
+            expected_columns=expected_columns,
+            num_expected_tables=len(expected_tables),
+            num_expected_columns=len(expected_columns)
         )
 
         # Call discover_objects
@@ -871,17 +1158,37 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
                 # Evaluate results
                 metrics = evaluate_result(expected_objs, discovered)
 
+                # Basic results
                 result.discovered_tables = metrics['discovered_tables']
                 result.discovered_columns = metrics['discovered_columns']
+
+                # Basic metrics (Precision, Recall, F1)
                 result.table_precision = metrics['table_precision']
                 result.table_recall = metrics['table_recall']
                 result.table_f1 = metrics['table_f1']
                 result.column_precision = metrics['column_precision']
                 result.column_recall = metrics['column_recall']
                 result.column_f1 = metrics['column_f1']
+
+                # Hit@k (binary)
                 result.table_hit_at_1 = metrics['hit_at_1']
                 result.table_hit_at_3 = metrics['hit_at_3']
                 result.table_hit_at_5 = metrics['hit_at_5']
+
+                # Recall@k (fraction - better for multi-table)
+                result.table_recall_at_3 = metrics['recall_at_3']
+                result.table_recall_at_5 = metrics['recall_at_5']
+                result.table_recall_at_10 = metrics['recall_at_10']
+
+                # Advanced metrics
+                result.table_mrr = metrics['mrr']
+                result.table_jaccard = metrics['jaccard']
+                result.table_exact_match = metrics['exact_match']
+
+                # Joint table-column metrics
+                result.joint_column_precision = metrics['joint_column_precision']
+                result.joint_column_recall = metrics['joint_column_recall']
+                result.joint_column_f1 = metrics['joint_column_f1']
             else:
                 result.error = "discover_objects returned None"
 
