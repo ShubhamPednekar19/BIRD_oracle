@@ -27,7 +27,6 @@
     so we index ANNOTATION_TEXT instead of ANNOTATION.
   - Hybrid index base column must be text -> we use DUMMY CHAR(1).
 
-============================================================================ */
 
 /* ----- optional: make re-runs easier ----- */
 SET SERVEROUTPUT ON
