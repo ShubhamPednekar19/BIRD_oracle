@@ -32,8 +32,7 @@ CREATE TABLE frpm
     "FRPM Count (Ages 5-17)" NUMBER,
     "Percent (%) Eligible FRPM (Ages 5-17)" NUMBER,
     "2013-14 CALPADS Fall 1 Certification Status" NUMBER,
-    PRIMARY KEY (CDSCode),
-    FOREIGN KEY (CDSCode) REFERENCES schools (CDSCode)
+    PRIMARY KEY (CDSCode)
 );
 
 CREATE TABLE satscores
@@ -49,8 +48,7 @@ CREATE TABLE satscores
     AvgScrMath NUMBER,
     AvgScrWrite NUMBER,
     NumGE1500 NUMBER,
-    PRIMARY KEY (cds),
-    FOREIGN KEY (cds) REFERENCES schools (CDSCode)
+    PRIMARY KEY (cds)
 );
 
 CREATE TABLE schools
@@ -106,3 +104,7 @@ CREATE TABLE schools
     LastUpdate DATE NOT NULL,
     PRIMARY KEY (CDSCode)
 );
+
+-- Deferred foreign key constraints
+ALTER TABLE frpm ADD CONSTRAINT FK_FRPM_1 FOREIGN KEY (CDSCode) REFERENCES schools (CDSCode);
+ALTER TABLE satscores ADD CONSTRAINT FK_SATSCORES_1 FOREIGN KEY (cds) REFERENCES schools (CDSCode);

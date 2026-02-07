@@ -90,8 +90,7 @@ CREATE TABLE foreign_data
     "text" VARCHAR2(4000),
     "type" VARCHAR2(4000),
     uuid VARCHAR2(4000),
-    PRIMARY KEY (id),
-    FOREIGN KEY (uuid) REFERENCES cards (uuid)
+    PRIMARY KEY (id)
 );
 
 CREATE TABLE legalities
@@ -100,8 +99,7 @@ CREATE TABLE legalities
     "format" VARCHAR2(4000),
     "status" VARCHAR2(4000),
     uuid VARCHAR2(4000),
-    PRIMARY KEY (id),
-    FOREIGN KEY (uuid) REFERENCES cards (uuid)
+    PRIMARY KEY (id)
 );
 
 CREATE TABLE rulings
@@ -110,8 +108,7 @@ CREATE TABLE rulings
     "date" DATE,
     "text" VARCHAR2(4000),
     uuid VARCHAR2(4000),
-    PRIMARY KEY (id),
-    FOREIGN KEY (uuid) REFERENCES cards (uuid)
+    PRIMARY KEY (id)
 );
 
 CREATE TABLE set_translations
@@ -120,8 +117,7 @@ CREATE TABLE set_translations
     "language" VARCHAR2(4000),
     setCode VARCHAR2(4000),
     translation VARCHAR2(4000),
-    PRIMARY KEY (id),
-    FOREIGN KEY (setCode) REFERENCES "sets" (code)
+    PRIMARY KEY (id)
 );
 
 CREATE TABLE "sets"
@@ -149,3 +145,9 @@ CREATE TABLE "sets"
     "type" VARCHAR2(4000),
     PRIMARY KEY (id)
 );
+
+-- Deferred foreign key constraints
+ALTER TABLE foreign_data ADD CONSTRAINT FK_FOREIGN_DATA_1 FOREIGN KEY (uuid) REFERENCES cards (uuid);
+ALTER TABLE legalities ADD CONSTRAINT FK_LEGALITIES_1 FOREIGN KEY (uuid) REFERENCES cards (uuid);
+ALTER TABLE rulings ADD CONSTRAINT FK_RULINGS_1 FOREIGN KEY (uuid) REFERENCES cards (uuid);
+ALTER TABLE set_translations ADD CONSTRAINT FK_SET_TRANSLATIONS_1 FOREIGN KEY (setCode) REFERENCES "sets" (code);

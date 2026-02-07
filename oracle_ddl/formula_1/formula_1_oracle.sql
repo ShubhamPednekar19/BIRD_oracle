@@ -22,9 +22,7 @@ CREATE TABLE constructorResults
     constructorId NUMBER DEFAULT 0 NOT NULL,
     points NUMBER,
     "status" VARCHAR2(4000),
-    PRIMARY KEY (constructorResultsId),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (constructorId) REFERENCES constructors (constructorId)
+    PRIMARY KEY (constructorResultsId)
 );
 
 CREATE TABLE constructorStandings
@@ -36,9 +34,7 @@ CREATE TABLE constructorStandings
     "position" NUMBER,
     positionText VARCHAR2(4000),
     wins NUMBER DEFAULT 0 NOT NULL,
-    PRIMARY KEY (constructorStandingsId),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (constructorId) REFERENCES constructors (constructorId)
+    PRIMARY KEY (constructorStandingsId)
 );
 
 CREATE TABLE constructors
@@ -60,9 +56,7 @@ CREATE TABLE driverStandings
     "position" NUMBER,
     positionText VARCHAR2(4000),
     wins NUMBER DEFAULT 0 NOT NULL,
-    PRIMARY KEY (driverStandingsId),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (driverId) REFERENCES drivers (driverId)
+    PRIMARY KEY (driverStandingsId)
 );
 
 CREATE TABLE drivers
@@ -87,9 +81,7 @@ CREATE TABLE lapTimes
     "position" NUMBER,
     "time" VARCHAR2(4000),
     milliseconds NUMBER,
-    PRIMARY KEY (raceId, driverId, lap),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (driverId) REFERENCES drivers (driverId)
+    PRIMARY KEY (raceId, driverId, lap)
 );
 
 CREATE TABLE pitStops
@@ -101,9 +93,7 @@ CREATE TABLE pitStops
     "time" VARCHAR2(4000) NOT NULL,
     duration VARCHAR2(4000),
     milliseconds NUMBER,
-    PRIMARY KEY (raceId, driverId, "stop"),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (driverId) REFERENCES drivers (driverId)
+    PRIMARY KEY (raceId, driverId, "stop")
 );
 
 CREATE TABLE qualifying
@@ -117,10 +107,7 @@ CREATE TABLE qualifying
     q1 VARCHAR2(4000),
     q2 VARCHAR2(4000),
     q3 VARCHAR2(4000),
-    PRIMARY KEY (qualifyId),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (driverId) REFERENCES drivers (driverId),
-    FOREIGN KEY (constructorId) REFERENCES constructors (constructorId)
+    PRIMARY KEY (qualifyId)
 );
 
 CREATE TABLE races
@@ -133,9 +120,7 @@ CREATE TABLE races
     "date" DATE DEFAULT '0000-00-00' NOT NULL,
     "time" VARCHAR2(4000),
     url VARCHAR2(4000) UNIQUE,
-    PRIMARY KEY (raceId),
-    FOREIGN KEY ("year") REFERENCES seasons ("year"),
-    FOREIGN KEY (circuitId) REFERENCES circuits (circuitId)
+    PRIMARY KEY (raceId)
 );
 
 CREATE TABLE results
@@ -158,11 +143,7 @@ CREATE TABLE results
     fastestLapTime VARCHAR2(4000),
     fastestLapSpeed VARCHAR2(4000),
     statusId NUMBER DEFAULT 0 NOT NULL,
-    PRIMARY KEY (resultId),
-    FOREIGN KEY (raceId) REFERENCES races (raceId),
-    FOREIGN KEY (driverId) REFERENCES drivers (driverId),
-    FOREIGN KEY (constructorId) REFERENCES constructors (constructorId),
-    FOREIGN KEY (statusId) REFERENCES "status" (statusId)
+    PRIMARY KEY (resultId)
 );
 
 CREATE TABLE seasons
@@ -178,3 +159,24 @@ CREATE TABLE "status"
     "status" VARCHAR2(4000) DEFAULT '' NOT NULL,
     PRIMARY KEY (statusId)
 );
+
+-- Deferred foreign key constraints
+ALTER TABLE constructorResults ADD CONSTRAINT FK_CONSTRUCTORRESULTS_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE constructorResults ADD CONSTRAINT FK_CONSTRUCTORRESULTS_2 FOREIGN KEY (constructorId) REFERENCES constructors (constructorId);
+ALTER TABLE constructorStandings ADD CONSTRAINT FK_CONSTRUCTORSTANDINGS_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE constructorStandings ADD CONSTRAINT FK_CONSTRUCTORSTANDINGS_2 FOREIGN KEY (constructorId) REFERENCES constructors (constructorId);
+ALTER TABLE driverStandings ADD CONSTRAINT FK_DRIVERSTANDINGS_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE driverStandings ADD CONSTRAINT FK_DRIVERSTANDINGS_2 FOREIGN KEY (driverId) REFERENCES drivers (driverId);
+ALTER TABLE lapTimes ADD CONSTRAINT FK_LAPTIMES_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE lapTimes ADD CONSTRAINT FK_LAPTIMES_2 FOREIGN KEY (driverId) REFERENCES drivers (driverId);
+ALTER TABLE pitStops ADD CONSTRAINT FK_PITSTOPS_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE pitStops ADD CONSTRAINT FK_PITSTOPS_2 FOREIGN KEY (driverId) REFERENCES drivers (driverId);
+ALTER TABLE qualifying ADD CONSTRAINT FK_QUALIFYING_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE qualifying ADD CONSTRAINT FK_QUALIFYING_2 FOREIGN KEY (driverId) REFERENCES drivers (driverId);
+ALTER TABLE qualifying ADD CONSTRAINT FK_QUALIFYING_3 FOREIGN KEY (constructorId) REFERENCES constructors (constructorId);
+ALTER TABLE races ADD CONSTRAINT FK_RACES_1 FOREIGN KEY ("year") REFERENCES seasons ("year");
+ALTER TABLE races ADD CONSTRAINT FK_RACES_2 FOREIGN KEY (circuitId) REFERENCES circuits (circuitId);
+ALTER TABLE results ADD CONSTRAINT FK_RESULTS_1 FOREIGN KEY (raceId) REFERENCES races (raceId);
+ALTER TABLE results ADD CONSTRAINT FK_RESULTS_2 FOREIGN KEY (driverId) REFERENCES drivers (driverId);
+ALTER TABLE results ADD CONSTRAINT FK_RESULTS_3 FOREIGN KEY (constructorId) REFERENCES constructors (constructorId);
+ALTER TABLE results ADD CONSTRAINT FK_RESULTS_4 FOREIGN KEY (statusId) REFERENCES "status" (statusId);

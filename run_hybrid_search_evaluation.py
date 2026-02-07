@@ -190,82 +190,6 @@ class OracleManager:
         self.sys_connection = None
         self.user_connection = None
         self.current_user = None
-        self.pdb_name = None  # Will be set after parsing connection string
-
-    def _parse_pdb_service(self, dsn: str) -> Optional[str]:
-        """
-        Extract PDB/service name from DSN.
-
-        Args:
-            dsn: DSN string like 'host:port/service' or 'host:port/service_name'
-
-        Returns:
-            PDB/service name or None if not found
-        """
-        # DSN format: host:port/service or just service_name
-        if '/' in dsn:
-            # Format: host:port/service
-            service = dsn.split('/')[-1]
-            # Remove any connection parameters after the service name
-            if '?' in service:
-                service = service.split('?')[0]
-            return service.upper()
-        return None
-
-    def _switch_to_pdb(self) -> bool:
-        """
-        Switch the SYSDBA session to the PDB specified in the connection string.
-
-        In Oracle CDB architecture, SYSDBA connections go to the root container
-        by default. Users created there won't be accessible from PDB connections.
-        This method switches the session to the correct PDB.
-
-        Returns:
-            True if successfully switched (or already in PDB), False on error
-        """
-        if not self.sys_connection or not self.pdb_name:
-            return True  # Nothing to switch
-
-        try:
-            cursor = self.sys_connection.cursor()
-
-            # Check current container
-            cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL")
-            current_container = cursor.fetchone()[0]
-
-            if current_container.upper() == self.pdb_name.upper():
-                print(f"  Already in PDB: {self.pdb_name}")
-                return True
-
-            # Check if we're in CDB$ROOT and need to switch
-            if current_container.upper() == 'CDB$ROOT':
-                # Try to switch to the PDB
-                try:
-                    cursor.execute(f"ALTER SESSION SET CONTAINER = {self.pdb_name}")
-                    print(f"  Switched to PDB: {self.pdb_name}")
-                    return True
-                except oracledb.DatabaseError as e:
-                    # PDB might not exist or name might be wrong
-                    # Try without the switch - maybe it's a non-CDB database
-                    error_str = str(e)
-                    if 'ORA-65011' in error_str or 'ORA-01109' in error_str:
-                        print(f"  Warning: Could not switch to PDB {self.pdb_name}: {e}")
-                        print(f"  Continuing in current container: {current_container}")
-                        return True
-                    raise
-            else:
-                # Already in a PDB (not CDB$ROOT)
-                print(f"  Connected to container: {current_container}")
-                return True
-
-        except oracledb.DatabaseError as e:
-            # If we get an error checking container, it might be a non-CDB database
-            error_str = str(e)
-            if 'ORA-02003' in error_str:  # Container not found - might be non-CDB
-                print(f"  Running in non-CDB mode")
-                return True
-            print(f"Error switching to PDB: {e}")
-            return False
 
     def connect_as_sys(self) -> bool:
         """Connect to Oracle as SYSDBA."""
@@ -285,9 +209,6 @@ class OracleManager:
             user, password = user_pass
             dsn = parts[1]
 
-            # Extract PDB name from DSN for later use
-            self.pdb_name = self._parse_pdb_service(dsn)
-
             self.sys_connection = oracledb.connect(
                 user=user,
                 password=password,
@@ -295,11 +216,6 @@ class OracleManager:
                 mode=oracledb.AUTH_MODE_SYSDBA
             )
             print(f"Connected to Oracle as SYSDBA")
-
-            # Switch to PDB if we're in a CDB environment
-            if not self._switch_to_pdb():
-                print("Warning: Could not switch to PDB, user creation may fail")
-
             return True
         except Exception as e:
             print(f"Error connecting as SYSDBA: {e}")
@@ -339,14 +255,7 @@ class OracleManager:
                 try:
                     cursor.execute(f"GRANT {grant} TO {username}")
                 except oracledb.DatabaseError as e:
-                    error_str = str(e)
-                    if 'ONNX_IMPORT' in grant and 'ORA-22930' in error_str:
-                        print(f"  Warning: ONNX_IMPORT directory does not exist in this PDB")
-                        print(f"  To create it, run as SYSDBA in your PDB:")
-                        print(f"    CREATE OR REPLACE DIRECTORY ONNX_IMPORT AS '/path/to/onnx/models';")
-                        print(f"    GRANT READ, WRITE ON DIRECTORY ONNX_IMPORT TO {username};")
-                    else:
-                        print(f"  Warning: Could not grant {grant}: {e}")
+                    print(f"  Warning: Could not grant {grant}: {e}")
 
             self.sys_connection.commit()
             print(f"  Granted privileges to: {username}")
@@ -386,11 +295,7 @@ class OracleManager:
 
     def execute_ddl_file(self, filepath: str) -> bool:
         """
-        Execute a DDL SQL file with two-pass FK handling.
-
-        First pass: Execute all statements, defer those that fail due to
-        missing referenced tables (ORA-00942).
-        Second pass: Retry deferred statements after all tables are created.
+        Execute a DDL SQL file.
 
         Args:
             filepath: Path to the SQL file
@@ -408,56 +313,23 @@ class OracleManager:
             # Split by semicolon and execute each statement
             statements = self._split_sql_statements(sql_content)
 
-            # First pass: execute statements, collect deferred ones
-            deferred_statements = []
-            other_errors = []
-
             for stmt in statements:
                 stmt = stmt.strip()
                 if stmt and not stmt.startswith('--'):
                     try:
                         cursor.execute(stmt)
                     except oracledb.DatabaseError as e:
+                        # Log but continue - some statements might fail due to dependencies
                         error_msg = str(e)
                         if 'ORA-00955' in error_msg:  # Object already exists
                             pass
                         elif 'ORA-02261' in error_msg:  # Unique constraint exists
                             pass
-                        elif 'ORA-00942' in error_msg:  # Table/view does not exist
-                            # Defer this statement - likely FK referencing not-yet-created table
-                            deferred_statements.append(stmt)
-                        elif 'ORA-02449' in error_msg:  # Unique/primary keys referenced by FK
-                            deferred_statements.append(stmt)
                         else:
-                            other_errors.append(error_msg[:100])
-
-            # Second pass: retry deferred statements (FK constraints)
-            still_failed = 0
-            for stmt in deferred_statements:
-                try:
-                    cursor.execute(stmt)
-                except oracledb.DatabaseError:
-                    still_failed += 1
+                            print(f"    Warning: {error_msg[:100]}")
 
             self.user_connection.commit()
-
-            # Summary output
-            filename = os.path.basename(filepath)
-            if deferred_statements:
-                succeeded = len(deferred_statements) - still_failed
-                if still_failed > 0:
-                    print(f"    Executed DDL: {filename} ({succeeded}/{len(deferred_statements)} deferred constraints succeeded)")
-                else:
-                    print(f"    Executed DDL: {filename} (all {len(deferred_statements)} deferred constraints succeeded)")
-            else:
-                print(f"    Executed DDL: {filename}")
-
-            # Show other errors (not FK-related) if any
-            for err in other_errors[:3]:  # Limit to first 3
-                print(f"    Warning: {err}")
-            if len(other_errors) > 3:
-                print(f"    ... and {len(other_errors) - 3} more warnings")
-
+            print(f"    Executed DDL: {os.path.basename(filepath)}")
             return True
 
         except Exception as e:
@@ -484,40 +356,13 @@ class OracleManager:
             with open(script_path, 'r', encoding='utf-8') as f:
                 sql_content = f.read()
 
-            # Check if this is a placeholder file
-            if 'placeholder' in sql_content.lower() and 'CREATE OR REPLACE PACKAGE' not in sql_content.upper():
-                print(f"  Warning: {script_path} appears to be a placeholder file")
-                print(f"  Please replace with actual developer package implementation")
-                print(f"  Skipping package creation...")
-                return False
-
             cursor = self.user_connection.cursor()
 
-            # Split PL/SQL content by '/' delimiter (standard for PL/SQL scripts)
-            # Each block (package spec, package body) is typically separated by '/'
-            blocks = sql_content.split('\n/\n')
-
-            for block in blocks:
-                block = block.strip()
-                if block and not block.startswith('--'):
-                    # Skip pure comment blocks or empty blocks
-                    # Check if it's a PL/SQL block or regular SQL
-                    if any(kw in block.upper() for kw in ['CREATE OR REPLACE PACKAGE',
-                                                           'CREATE OR REPLACE PROCEDURE',
-                                                           'CREATE OR REPLACE FUNCTION',
-                                                           'BEGIN', 'DECLARE']):
-                        cursor.execute(block)
-                    elif block.strip().upper().startswith('SELECT'):
-                        # Skip standalone SELECT statements (likely placeholders)
-                        continue
-                    else:
-                        # Try to execute as regular SQL
-                        try:
-                            cursor.execute(block)
-                        except oracledb.DatabaseError:
-                            pass  # Ignore errors for non-essential statements
-
+            # Execute the entire package creation as one statement
+            # PL/SQL packages need to be executed differently
+            cursor.execute(sql_content)
             self.user_connection.commit()
+
             print(f"    Executed index creation script")
             return True
 
@@ -536,13 +381,8 @@ class OracleManager:
             self.user_connection.commit()
             print(f"    Called developer.refresh_data()")
             return True
-        except oracledb.DatabaseError as e:
-            error_str = str(e)
-            if 'PLS-00201' in error_str:
-                # Package not installed - this is expected if index_creation.sql is placeholder
-                return False
-            else:
-                print(f"    Warning: refresh_data failed: {error_str[:80]}")
+        except Exception as e:
+            print(f"Error calling refresh_data: {e}")
             return False
 
     def call_setup_hybrid_search(self) -> bool:
@@ -556,13 +396,8 @@ class OracleManager:
             self.user_connection.commit()
             print(f"    Called developer.setup_hybrid_search()")
             return True
-        except oracledb.DatabaseError as e:
-            error_str = str(e)
-            if 'PLS-00201' in error_str:
-                # Package not installed - this is expected if index_creation.sql is placeholder
-                return False
-            else:
-                print(f"    Warning: setup_hybrid_search failed: {error_str[:80]}")
+        except Exception as e:
+            print(f"Error calling setup_hybrid_search: {e}")
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
@@ -1275,17 +1110,12 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     if os.path.exists(metadata_file):
         oracle_mgr.execute_ddl_file(metadata_file)
 
-    # Step 4: Execute index creation script and setup hybrid search
-    package_installed = oracle_mgr.execute_index_creation(index_script)
+    # Step 4: Execute index creation script
+    oracle_mgr.execute_index_creation(index_script)
 
-    # Step 5: Call refresh_data and setup_hybrid_search (only if package was installed)
-    if package_installed:
-        refresh_ok = oracle_mgr.call_refresh_data()
-        setup_ok = oracle_mgr.call_setup_hybrid_search()
-        if not refresh_ok and not setup_ok:
-            print(f"  Note: developer package not available, skipping hybrid search setup")
-    else:
-        print(f"  Note: Skipping hybrid search setup (package not installed)")
+    # Step 5: Call refresh_data and setup_hybrid_search
+    oracle_mgr.call_refresh_data()
+    oracle_mgr.call_setup_hybrid_search()
 
     # Step 6: Process questions
     print(f"\n  Processing {len(questions)} questions...")
