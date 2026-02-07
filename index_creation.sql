@@ -29,8 +29,8 @@
 
 
 /* ----- optional: make re-runs easier ----- */
-SET SERVEROUTPUT ON
-WHENEVER SQLERROR EXIT SQL.SQLCODE
+-- SET SERVEROUTPUT ON           -- SQL*Plus only; not valid in oracledb
+-- WHENEVER SQLERROR EXIT SQL.SQLCODE  -- SQL*Plus only; not valid in oracledb
 
 /* ============================================================================ */
 /*  0) DROP objects (ignore if missing)                                           */
@@ -62,6 +62,7 @@ CREATE TABLE all_objects_search_text (
   column_summary CLOB,
   dummy          CHAR(1) DEFAULT 'X' NOT NULL
 );
+/
 
 CREATE TABLE all_cols_search_text (
   object_id      NUMBER NOT NULL,
@@ -76,6 +77,7 @@ CREATE TABLE all_cols_search_text (
   CONSTRAINT all_cols_search_fk FOREIGN KEY (object_id)
     REFERENCES all_objects_search_text(object_id)
 );
+/
 
 /* ============================================================================ */
 /*  2) PACKAGE: DEVELOPER                                                         */
@@ -170,7 +172,7 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
   );
 END developer;
 /
-SHOW ERRORS
+-- SHOW ERRORS  -- SQL*Plus only; not valid in oracledb
 
 CREATE OR REPLACE PACKAGE BODY developer AS
 
@@ -727,7 +729,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
 
 END developer;
 /
-SHOW ERRORS
+-- SHOW ERRORS  -- SQL*Plus only; not valid in oracledb
 
 /* ============================================================================ */
 /*  3) OPTIONAL: Example execution (uncomment to run)                            */
