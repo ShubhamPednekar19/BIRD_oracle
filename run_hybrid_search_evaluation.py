@@ -26,6 +26,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -493,29 +494,67 @@ class OracleManager:
 
             cursor = self.user_connection.cursor()
 
+            # Strip SQL*Plus-specific commands (not valid via oracledb)
+            sql_content = re.sub(r'(?m)^\s*SET\s+SERVEROUTPUT\s+.*$', '', sql_content)
+            sql_content = re.sub(r'(?m)^\s*WHENEVER\s+SQLERROR\s+.*$', '', sql_content)
+            sql_content = re.sub(r'(?m)^\s*SHOW\s+ERRORS\s*$', '', sql_content)
+
             # Split PL/SQL content by '/' delimiter (standard for PL/SQL scripts)
             # Each block (package spec, package body) is typically separated by '/'
             blocks = sql_content.split('\n/\n')
 
+            plsql_keywords = ['CREATE OR REPLACE PACKAGE',
+                              'CREATE OR REPLACE PROCEDURE',
+                              'CREATE OR REPLACE FUNCTION',
+                              'BEGIN', 'DECLARE']
+
             for block in blocks:
                 block = block.strip()
-                if block and not block.startswith('--'):
-                    # Skip pure comment blocks or empty blocks
-                    # Check if it's a PL/SQL block or regular SQL
-                    if any(kw in block.upper() for kw in ['CREATE OR REPLACE PACKAGE',
-                                                           'CREATE OR REPLACE PROCEDURE',
-                                                           'CREATE OR REPLACE FUNCTION',
-                                                           'BEGIN', 'DECLARE']):
-                        cursor.execute(block)
-                    elif block.strip().upper().startswith('SELECT'):
-                        # Skip standalone SELECT statements (likely placeholders)
-                        continue
-                    else:
-                        # Try to execute as regular SQL
-                        try:
-                            cursor.execute(block)
-                        except oracledb.DatabaseError:
-                            pass  # Ignore errors for non-essential statements
+                if not block or block.startswith('--'):
+                    continue
+
+                upper_block = block.upper()
+
+                # Check if it's a PL/SQL block or regular SQL
+                if any(kw in upper_block for kw in plsql_keywords):
+                    # Find where the PL/SQL part starts (there may be
+                    # standalone DDL like CREATE TABLE before it)
+                    plsql_start = len(block)
+                    for kw in plsql_keywords:
+                        idx = upper_block.find(kw)
+                        if idx != -1 and idx < plsql_start:
+                            plsql_start = idx
+
+                    # Execute any DDL statements that precede the PL/SQL block
+                    pre_plsql = block[:plsql_start].strip()
+                    if pre_plsql:
+                        for stmt in pre_plsql.split(';'):
+                            stmt = stmt.strip()
+                            # Remove comments to check if there's actual SQL
+                            cleaned = re.sub(r'/\*.*?\*/', '', stmt, flags=re.DOTALL)
+                            cleaned = re.sub(r'--.*$', '', cleaned, flags=re.MULTILINE).strip()
+                            if cleaned:
+                                try:
+                                    cursor.execute(stmt)
+                                except oracledb.DatabaseError as e:
+                                    print(f"    Warning: DDL statement failed: {e}")
+
+                    # Execute the PL/SQL block itself
+                    plsql_part = block[plsql_start:].strip()
+                    if plsql_part:
+                        cursor.execute(plsql_part)
+
+                elif upper_block.lstrip().startswith('SELECT'):
+                    # Skip standalone SELECT statements (likely placeholders)
+                    continue
+                else:
+                    # Try to execute as regular SQL (strip trailing ; for DDL)
+                    try:
+                        sql = block.rstrip().rstrip(';').rstrip()
+                        if sql:
+                            cursor.execute(sql)
+                    except oracledb.DatabaseError:
+                        pass  # Ignore errors for non-essential statements
 
             self.user_connection.commit()
             print(f"    Executed index creation script")
