@@ -386,7 +386,11 @@ class OracleManager:
 
     def execute_ddl_file(self, filepath: str) -> bool:
         """
-        Execute a DDL SQL file.
+        Execute a DDL SQL file with two-pass FK handling.
+
+        First pass: Execute all statements, defer those that fail due to
+        missing referenced tables (ORA-00942).
+        Second pass: Retry deferred statements after all tables are created.
 
         Args:
             filepath: Path to the SQL file
@@ -404,23 +408,56 @@ class OracleManager:
             # Split by semicolon and execute each statement
             statements = self._split_sql_statements(sql_content)
 
+            # First pass: execute statements, collect deferred ones
+            deferred_statements = []
+            other_errors = []
+
             for stmt in statements:
                 stmt = stmt.strip()
                 if stmt and not stmt.startswith('--'):
                     try:
                         cursor.execute(stmt)
                     except oracledb.DatabaseError as e:
-                        # Log but continue - some statements might fail due to dependencies
                         error_msg = str(e)
                         if 'ORA-00955' in error_msg:  # Object already exists
                             pass
                         elif 'ORA-02261' in error_msg:  # Unique constraint exists
                             pass
+                        elif 'ORA-00942' in error_msg:  # Table/view does not exist
+                            # Defer this statement - likely FK referencing not-yet-created table
+                            deferred_statements.append(stmt)
+                        elif 'ORA-02449' in error_msg:  # Unique/primary keys referenced by FK
+                            deferred_statements.append(stmt)
                         else:
-                            print(f"    Warning: {error_msg[:100]}")
+                            other_errors.append(error_msg[:100])
+
+            # Second pass: retry deferred statements (FK constraints)
+            still_failed = 0
+            for stmt in deferred_statements:
+                try:
+                    cursor.execute(stmt)
+                except oracledb.DatabaseError:
+                    still_failed += 1
 
             self.user_connection.commit()
-            print(f"    Executed DDL: {os.path.basename(filepath)}")
+
+            # Summary output
+            filename = os.path.basename(filepath)
+            if deferred_statements:
+                succeeded = len(deferred_statements) - still_failed
+                if still_failed > 0:
+                    print(f"    Executed DDL: {filename} ({succeeded}/{len(deferred_statements)} deferred constraints succeeded)")
+                else:
+                    print(f"    Executed DDL: {filename} (all {len(deferred_statements)} deferred constraints succeeded)")
+            else:
+                print(f"    Executed DDL: {filename}")
+
+            # Show other errors (not FK-related) if any
+            for err in other_errors[:3]:  # Limit to first 3
+                print(f"    Warning: {err}")
+            if len(other_errors) > 3:
+                print(f"    ... and {len(other_errors) - 3} more warnings")
+
             return True
 
         except Exception as e:
@@ -500,11 +537,12 @@ class OracleManager:
             print(f"    Called developer.refresh_data()")
             return True
         except oracledb.DatabaseError as e:
-            error_obj, = e.args
-            if 'PLS-00201' in str(error_obj):
-                print(f"  Skipping refresh_data: developer package not installed")
+            error_str = str(e)
+            if 'PLS-00201' in error_str:
+                # Package not installed - this is expected if index_creation.sql is placeholder
+                return False
             else:
-                print(f"Error calling refresh_data: {e}")
+                print(f"    Warning: refresh_data failed: {error_str[:80]}")
             return False
 
     def call_setup_hybrid_search(self) -> bool:
@@ -519,11 +557,12 @@ class OracleManager:
             print(f"    Called developer.setup_hybrid_search()")
             return True
         except oracledb.DatabaseError as e:
-            error_obj, = e.args
-            if 'PLS-00201' in str(error_obj):
-                print(f"  Skipping setup_hybrid_search: developer package not installed")
+            error_str = str(e)
+            if 'PLS-00201' in error_str:
+                # Package not installed - this is expected if index_creation.sql is placeholder
+                return False
             else:
-                print(f"Error calling setup_hybrid_search: {e}")
+                print(f"    Warning: setup_hybrid_search failed: {error_str[:80]}")
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
@@ -1236,12 +1275,17 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     if os.path.exists(metadata_file):
         oracle_mgr.execute_ddl_file(metadata_file)
 
-    # Step 4: Execute index creation script
-    oracle_mgr.execute_index_creation(index_script)
+    # Step 4: Execute index creation script and setup hybrid search
+    package_installed = oracle_mgr.execute_index_creation(index_script)
 
-    # Step 5: Call refresh_data and setup_hybrid_search
-    oracle_mgr.call_refresh_data()
-    oracle_mgr.call_setup_hybrid_search()
+    # Step 5: Call refresh_data and setup_hybrid_search (only if package was installed)
+    if package_installed:
+        refresh_ok = oracle_mgr.call_refresh_data()
+        setup_ok = oracle_mgr.call_setup_hybrid_search()
+        if not refresh_ok and not setup_ok:
+            print(f"  Note: developer package not available, skipping hybrid search setup")
+    else:
+        print(f"  Note: Skipping hybrid search setup (package not installed)")
 
     # Step 6: Process questions
     print(f"\n  Processing {len(questions)} questions...")
