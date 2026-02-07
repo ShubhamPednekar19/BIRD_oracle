@@ -190,6 +190,82 @@ class OracleManager:
         self.sys_connection = None
         self.user_connection = None
         self.current_user = None
+        self.pdb_name = None  # Will be set after parsing connection string
+
+    def _parse_pdb_service(self, dsn: str) -> Optional[str]:
+        """
+        Extract PDB/service name from DSN.
+
+        Args:
+            dsn: DSN string like 'host:port/service' or 'host:port/service_name'
+
+        Returns:
+            PDB/service name or None if not found
+        """
+        # DSN format: host:port/service or just service_name
+        if '/' in dsn:
+            # Format: host:port/service
+            service = dsn.split('/')[-1]
+            # Remove any connection parameters after the service name
+            if '?' in service:
+                service = service.split('?')[0]
+            return service.upper()
+        return None
+
+    def _switch_to_pdb(self) -> bool:
+        """
+        Switch the SYSDBA session to the PDB specified in the connection string.
+
+        In Oracle CDB architecture, SYSDBA connections go to the root container
+        by default. Users created there won't be accessible from PDB connections.
+        This method switches the session to the correct PDB.
+
+        Returns:
+            True if successfully switched (or already in PDB), False on error
+        """
+        if not self.sys_connection or not self.pdb_name:
+            return True  # Nothing to switch
+
+        try:
+            cursor = self.sys_connection.cursor()
+
+            # Check current container
+            cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM DUAL")
+            current_container = cursor.fetchone()[0]
+
+            if current_container.upper() == self.pdb_name.upper():
+                print(f"  Already in PDB: {self.pdb_name}")
+                return True
+
+            # Check if we're in CDB$ROOT and need to switch
+            if current_container.upper() == 'CDB$ROOT':
+                # Try to switch to the PDB
+                try:
+                    cursor.execute(f"ALTER SESSION SET CONTAINER = {self.pdb_name}")
+                    print(f"  Switched to PDB: {self.pdb_name}")
+                    return True
+                except oracledb.DatabaseError as e:
+                    # PDB might not exist or name might be wrong
+                    # Try without the switch - maybe it's a non-CDB database
+                    error_str = str(e)
+                    if 'ORA-65011' in error_str or 'ORA-01109' in error_str:
+                        print(f"  Warning: Could not switch to PDB {self.pdb_name}: {e}")
+                        print(f"  Continuing in current container: {current_container}")
+                        return True
+                    raise
+            else:
+                # Already in a PDB (not CDB$ROOT)
+                print(f"  Connected to container: {current_container}")
+                return True
+
+        except oracledb.DatabaseError as e:
+            # If we get an error checking container, it might be a non-CDB database
+            error_str = str(e)
+            if 'ORA-02003' in error_str:  # Container not found - might be non-CDB
+                print(f"  Running in non-CDB mode")
+                return True
+            print(f"Error switching to PDB: {e}")
+            return False
 
     def connect_as_sys(self) -> bool:
         """Connect to Oracle as SYSDBA."""
@@ -209,6 +285,9 @@ class OracleManager:
             user, password = user_pass
             dsn = parts[1]
 
+            # Extract PDB name from DSN for later use
+            self.pdb_name = self._parse_pdb_service(dsn)
+
             self.sys_connection = oracledb.connect(
                 user=user,
                 password=password,
@@ -216,6 +295,11 @@ class OracleManager:
                 mode=oracledb.AUTH_MODE_SYSDBA
             )
             print(f"Connected to Oracle as SYSDBA")
+
+            # Switch to PDB if we're in a CDB environment
+            if not self._switch_to_pdb():
+                print("Warning: Could not switch to PDB, user creation may fail")
+
             return True
         except Exception as e:
             print(f"Error connecting as SYSDBA: {e}")
@@ -255,7 +339,14 @@ class OracleManager:
                 try:
                     cursor.execute(f"GRANT {grant} TO {username}")
                 except oracledb.DatabaseError as e:
-                    print(f"  Warning: Could not grant {grant}: {e}")
+                    error_str = str(e)
+                    if 'ONNX_IMPORT' in grant and 'ORA-22930' in error_str:
+                        print(f"  Warning: ONNX_IMPORT directory does not exist in this PDB")
+                        print(f"  To create it, run as SYSDBA in your PDB:")
+                        print(f"    CREATE OR REPLACE DIRECTORY ONNX_IMPORT AS '/path/to/onnx/models';")
+                        print(f"    GRANT READ, WRITE ON DIRECTORY ONNX_IMPORT TO {username};")
+                    else:
+                        print(f"  Warning: Could not grant {grant}: {e}")
 
             self.sys_connection.commit()
             print(f"  Granted privileges to: {username}")
