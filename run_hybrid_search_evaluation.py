@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
+from typing import List
 
 try:
     import oracledb
@@ -272,19 +273,9 @@ class OracleManager:
         """Connect to Oracle as SYSDBA."""
         try:
             # Parse connection string
-            # Expected format: user/password@host:port/service
-            parts = self.connection_string.split('@')
-            if len(parts) != 2:
-                print(f"Error: Invalid connection string format")
-                return False
-
-            user_pass = parts[0].split('/')
-            if len(user_pass) != 2:
-                print(f"Error: Invalid user/password format")
-                return False
-
-            user, password = user_pass
-            dsn = parts[1]
+            user = 'sys'
+            password = 'knl_test7'
+            dsn = self.connection_string
 
             # Extract PDB name from DSN for later use
             self.pdb_name = self._parse_pdb_service(dsn)
@@ -372,7 +363,7 @@ class OracleManager:
                 self.user_connection.close()
 
             # Parse DSN from sys connection string
-            dsn = self.connection_string.split('@')[1]
+            dsn = self.connection_string
 
             self.user_connection = oracledb.connect(
                 user=username,
@@ -385,80 +376,49 @@ class OracleManager:
             print(f"Error connecting as user {username}: {e}")
             return False
 
+
     def execute_ddl_file(self, filepath: str) -> bool:
         """
-        Execute a DDL SQL file with two-pass FK handling.
-
-        First pass: Execute all statements, defer those that fail due to
-        missing referenced tables (ORA-00942).
-        Second pass: Retry deferred statements after all tables are created.
-
-        Args:
-            filepath: Path to the SQL file
+        Execute a SQL/DDL file sequentially using split_oracle_script().
+        - Supports SQL statements terminated by ';'
+        - Supports PL/SQL / CREATE OR REPLACE terminated by '/' on its own line
+        - Runs in order; commits at end
         """
         if not self.user_connection:
             print("Error: Not connected as user")
             return False
 
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 sql_content = f.read()
 
-            cursor = self.user_connection.cursor()
+            statements = self.split_oracle_script(sql_content)
 
-            # Split by semicolon and execute each statement
-            statements = self._split_sql_statements(sql_content)
+            filename = os.path.basename(filepath)
 
-            # First pass: execute statements, collect deferred ones
-            deferred_statements = []
-            other_errors = []
+            with self.user_connection.cursor() as cursor:
+                for i, stmt in enumerate(statements, start=1):
+                    stmt = stmt.strip()
+                    if not stmt:
+                        continue
 
-            for stmt in statements:
-                stmt = stmt.strip()
-                if stmt and not stmt.startswith('--'):
+                    # Skip pure comment "statements"
+                    if stmt.startswith("--"):
+                        continue
+
                     try:
                         cursor.execute(stmt)
                     except oracledb.DatabaseError as e:
-                        error_msg = str(e)
-                        if 'ORA-00955' in error_msg:  # Object already exists
-                            pass
-                        elif 'ORA-02261' in error_msg:  # Unique constraint exists
-                            pass
-                        elif 'ORA-00942' in error_msg:  # Table/view does not exist
-                            # Defer this statement - likely FK referencing not-yet-created table
-                            deferred_statements.append(stmt)
-                        elif 'ORA-02449' in error_msg:  # Unique/primary keys referenced by FK
-                            deferred_statements.append(stmt)
-                        else:
-                            other_errors.append(error_msg[:100])
-
-            # Second pass: retry deferred statements (FK constraints)
-            still_failed = 0
-            for stmt in deferred_statements:
-                try:
-                    cursor.execute(stmt)
-                except oracledb.DatabaseError:
-                    still_failed += 1
+                        # Give a helpful error pointing to the statement number
+                        preview = stmt[:800].replace("\n", "\\n")
+                        print(f"Error executing {filename} at statement #{i}: {e}")
+                        print(f"Statement preview: {preview}")
+                        # rollback to keep session clean (optional but recommended)
+                        self.user_connection.rollback()
+                        return False
 
             self.user_connection.commit()
-
-            # Summary output
-            filename = os.path.basename(filepath)
-            if deferred_statements:
-                succeeded = len(deferred_statements) - still_failed
-                if still_failed > 0:
-                    print(f"    Executed DDL: {filename} ({succeeded}/{len(deferred_statements)} deferred constraints succeeded)")
-                else:
-                    print(f"    Executed DDL: {filename} (all {len(deferred_statements)} deferred constraints succeeded)")
-            else:
-                print(f"    Executed DDL: {filename}")
-
-            # Show other errors (not FK-related) if any
-            for err in other_errors[:3]:  # Limit to first 3
-                print(f"    Warning: {err}")
-            if len(other_errors) > 3:
-                print(f"    ... and {len(other_errors) - 3} more warnings")
-
+            print(f"Executed DDL: {filename} ({len([s for s in statements if s.strip()])} statements)")
             return True
 
         except Exception as e:
@@ -703,43 +663,47 @@ class OracleManager:
         if self.sys_connection:
             self.sys_connection.close()
 
-    def _split_sql_statements(self, sql_content: str) -> List[str]:
-        """Split SQL content into individual statements."""
-        # Simple split by semicolon, but handle PL/SQL blocks
-        statements = []
-        current = []
+    def split_oracle_script(self, sql: str) -> List[str]:
+        statements: List[str] = []
+        buf: List[str] = []
         in_plsql = False
 
-        for line in sql_content.split('\n'):
-            stripped = line.strip().upper()
+        def flush():
+            nonlocal buf
+            text = "\n".join(buf).strip()
+            buf = []
+            if text:
+                # remove trailing semicolon for plain SQL
+                if not in_plsql and text.endswith(";"):
+                    text = text[:-1].rstrip()
+                statements.append(text)
 
-            # Detect PL/SQL block start
-            if stripped.startswith('CREATE OR REPLACE') or stripped.startswith('BEGIN') or \
-               stripped.startswith('DECLARE'):
+        for raw_line in sql.splitlines():
+            line = raw_line.rstrip("\n")
+            stripped = line.strip()
+            upper = stripped.upper()
+
+            # Start of a PL/SQL or DDL unit that usually needs "/" terminator
+            if upper.startswith("CREATE OR REPLACE") or upper == "BEGIN" or upper.startswith("DECLARE"):
                 in_plsql = True
 
-            current.append(line)
-
-            # Detect end of statement
-            if not in_plsql and line.strip().endswith(';'):
-                stmt = '\n'.join(current).strip()
-                if stmt.endswith(';'):
-                    stmt = stmt[:-1]
-                statements.append(stmt)
-                current = []
-            elif in_plsql and (stripped == 'END;' or stripped.startswith('END ')):
-                stmt = '\n'.join(current).strip()
-                statements.append(stmt)
-                current = []
+            # SQL*Plus terminator for PL/SQL / CREATE OR REPLACE blocks
+            if in_plsql and stripped == "/":
+                flush()
                 in_plsql = False
+                continue
 
-        # Add any remaining content
-        if current:
-            stmt = '\n'.join(current).strip()
-            if stmt:
-                if stmt.endswith(';'):
-                    stmt = stmt[:-1]
-                statements.append(stmt)
+            buf.append(line)
+
+            # End of a normal SQL statement
+            if (not in_plsql) and stripped.endswith(";"):
+                flush()
+
+        # remainder
+        if buf:
+            # treat remainder as a statement too
+            in_plsql = False
+            flush()
 
         return statements
 
