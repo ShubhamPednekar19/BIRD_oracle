@@ -1,7 +1,3 @@
--- Oracle Metadata for card_games
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: cards
 COMMENT ON COLUMN cards.artist IS 'The name of the artist that illustrated the card art.';
 COMMENT ON COLUMN cards.asciiName IS 'The ASCII(opens new window) (Basic/128) code formatted card name with no special unicode characters.';
 COMMENT ON COLUMN cards.availability IS 'A list of the card''s available printing types.';
@@ -114,7 +110,6 @@ COMMENT ON COLUMN cards.uuid IS 'The universal unique identifier (v5) generated 
 ALTER TABLE cards MODIFY (uuid ANNOTATIONS (ADD value_description 'NOT USEFUL'));
 COMMENT ON COLUMN cards.watermark IS 'The name of the watermark on the card.';
 
--- Table: foreign_data
 COMMENT ON COLUMN foreign_data.id IS 'unique id number identifying this row of data';
 COMMENT ON COLUMN foreign_data.flavorText IS 'The foreign flavor text of the card.';
 COMMENT ON COLUMN foreign_data."language" IS 'The foreign language of card.';
@@ -123,24 +118,20 @@ COMMENT ON COLUMN foreign_data."name" IS 'The foreign name of the card.';
 COMMENT ON COLUMN foreign_data."text" IS 'The foreign text ruling of the card.';
 COMMENT ON COLUMN foreign_data."type" IS 'The foreign type of the card. Includes any supertypes and subtypes.';
 
--- Table: legalities
 COMMENT ON COLUMN legalities.id IS 'unique id identifying this legality';
 COMMENT ON COLUMN legalities."format" IS 'format of play';
 ALTER TABLE legalities MODIFY ("format" ANNOTATIONS (ADD value_description 'each value refers to different rules to play'));
 ALTER TABLE legalities MODIFY ("status" ANNOTATIONS (ADD value_description '• legal• banned• restricted'));
 
--- Table: rulings
 COMMENT ON COLUMN rulings.id IS 'unique id identifying this ruling';
 COMMENT ON COLUMN rulings."date" IS 'date';
 COMMENT ON COLUMN rulings."text" IS 'description about this ruling';
 
--- Table: set_translations
 COMMENT ON COLUMN set_translations.id IS 'unique id identifying this set';
 COMMENT ON COLUMN set_translations."language" IS 'language of this card set';
 COMMENT ON COLUMN set_translations.setCode IS 'the set code for this set';
 COMMENT ON COLUMN set_translations.translation IS 'translation of this card set';
 
--- Table: sets
 COMMENT ON COLUMN sets.id IS 'unique id identifying this set';
 COMMENT ON COLUMN sets.baseSetSize IS 'The number of cards in the set.';
 COMMENT ON COLUMN sets."block" IS 'The block name the set was in.';

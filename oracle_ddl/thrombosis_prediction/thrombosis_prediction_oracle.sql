@@ -1,6 +1,3 @@
--- Oracle DDL for thrombosis_prediction.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE Examination
 (
     ID NUMBER,
@@ -79,6 +76,5 @@ CREATE TABLE Patient
     PRIMARY KEY (ID)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE Examination ADD CONSTRAINT FK_EXAMINATION_1 FOREIGN KEY (ID) REFERENCES Patient (ID) ON DELETE CASCADE;
 ALTER TABLE Laboratory ADD CONSTRAINT FK_LABORATORY_1 FOREIGN KEY (ID) REFERENCES Patient (ID) ON DELETE CASCADE;

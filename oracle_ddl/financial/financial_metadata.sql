@@ -1,14 +1,9 @@
--- Oracle Metadata for financial
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: account
 COMMENT ON COLUMN "account".account_id IS 'the id of the account';
 COMMENT ON COLUMN "account".district_id IS 'location of branch';
 COMMENT ON COLUMN "account".frequency IS 'frequency of the acount';
 COMMENT ON COLUMN "account"."date" IS 'the creation date of the account';
 ALTER TABLE "account" MODIFY ("date" ANNOTATIONS (ADD value_description 'in the form YYMMDD'));
 
--- Table: card
 COMMENT ON COLUMN card.card_id IS 'id number of credit card';
 COMMENT ON COLUMN card.disp_id IS 'disposition id';
 COMMENT ON COLUMN card."type" IS 'type of credit card';
@@ -16,20 +11,17 @@ ALTER TABLE card MODIFY ("type" ANNOTATIONS (ADD value_description '"junior": ju
 COMMENT ON COLUMN card.issued IS 'the date when the credit card issued';
 ALTER TABLE card MODIFY (issued ANNOTATIONS (ADD value_description 'in the form YYMMDD'));
 
--- Table: client
 COMMENT ON COLUMN client.client_id IS 'the unique number';
 ALTER TABLE client MODIFY (gender ANNOTATIONS (ADD value_description 'F：female M：male'));
 COMMENT ON COLUMN client.birth_date IS 'birth date';
 COMMENT ON COLUMN client.district_id IS 'location of branch';
 
--- Table: disp
 COMMENT ON COLUMN disp.disp_id IS 'unique number of identifying this row of record';
 COMMENT ON COLUMN disp.client_id IS 'id number of client';
 COMMENT ON COLUMN disp.account_id IS 'id number of account';
 COMMENT ON COLUMN disp."type" IS 'type of disposition';
 ALTER TABLE disp MODIFY ("type" ANNOTATIONS (ADD value_description '"OWNER" : "USER" : "DISPONENT"commonsense evidence:the account can only have the right to issue permanent orders or apply for loans'));
 
--- Table: district
 COMMENT ON COLUMN district.district_id IS 'location of branch';
 COMMENT ON COLUMN district.A2 IS 'district_name';
 COMMENT ON COLUMN district.A3 IS 'region';
@@ -46,7 +38,6 @@ COMMENT ON COLUMN district.A14 IS 'no. of entrepreneurs per 1000 inhabitants';
 COMMENT ON COLUMN district.A15 IS 'no. of committed crimes 1995';
 COMMENT ON COLUMN district.A16 IS 'no. of committed crimes 1996';
 
--- Table: loan
 COMMENT ON COLUMN loan.loan_id IS 'the id number identifying the loan data';
 COMMENT ON COLUMN loan.account_id IS 'the id number identifying the account';
 COMMENT ON COLUMN loan."date" IS 'the date when the loan is approved';
@@ -59,7 +50,6 @@ ALTER TABLE loan MODIFY (payments ANNOTATIONS (ADD value_description 'unit：mon
 COMMENT ON COLUMN loan."status" IS 'repayment status';
 ALTER TABLE loan MODIFY ("status" ANNOTATIONS (ADD value_description '''A'' stands for contract finished, no problems;''B'' stands for contract finished, loan not paid;''C'' stands for running contract, OK so far;''D'' stands for running contract, client in debt'));
 
--- Table: order
 COMMENT ON COLUMN "order".order_id IS 'identifying the unique order';
 COMMENT ON COLUMN "order".account_id IS 'id number of account';
 COMMENT ON COLUMN "order".bank_to IS 'bank of the recipient';
@@ -69,7 +59,6 @@ COMMENT ON COLUMN "order".amount IS 'debited amount';
 COMMENT ON COLUMN "order".k_symbol IS 'purpose of the payment';
 ALTER TABLE "order" MODIFY (k_symbol ANNOTATIONS (ADD value_description '"POJISTNE" stands for insurance payment"SIPO" stands for household payment"LEASING" stands for leasing"UVER" stands for loan payment'));
 
--- Table: trans
 COMMENT ON COLUMN trans.trans_id IS 'transaction id';
 COMMENT ON COLUMN trans."date" IS 'date of transaction';
 COMMENT ON COLUMN trans."type" IS '+/- transaction';

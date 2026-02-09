@@ -1,7 +1,3 @@
--- Oracle Metadata for formula_1
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: circuits
 COMMENT ON COLUMN circuits.circuitId IS 'unique identification number of the circuit';
 COMMENT ON COLUMN circuits.circuitRef IS 'circuit reference name';
 COMMENT ON COLUMN circuits."name" IS 'full name of circuit';
@@ -13,14 +9,12 @@ ALTER TABLE circuits MODIFY (lng ANNOTATIONS (ADD value_description 'commonsense
 ALTER TABLE circuits MODIFY (alt ANNOTATIONS (ADD value_description 'not useful'));
 COMMENT ON COLUMN circuits.url IS 'url';
 
--- Table: constructorResults
 COMMENT ON COLUMN constructorResults.constructorResultsId IS 'constructor Results Id';
 COMMENT ON COLUMN constructorResults.raceId IS 'race id';
 COMMENT ON COLUMN constructorResults.constructorId IS 'constructor id';
 COMMENT ON COLUMN constructorResults.points IS 'points';
 COMMENT ON COLUMN constructorResults."status" IS 'status';
 
--- Table: constructorStandings
 COMMENT ON COLUMN constructorStandings.constructorStandingsId IS 'unique identification of the constructor standing records';
 COMMENT ON COLUMN constructorStandings.raceId IS 'id number identifying which races';
 COMMENT ON COLUMN constructorStandings.constructorId IS 'id number identifying which id';
@@ -29,7 +23,6 @@ COMMENT ON COLUMN constructorStandings."position" IS 'position or track of circu
 ALTER TABLE constructorStandings MODIFY (positionText ANNOTATIONS (ADD value_description 'same with position, not quite useful'));
 COMMENT ON COLUMN constructorStandings.wins IS 'wins';
 
--- Table: constructors
 COMMENT ON COLUMN constructors.constructorId IS 'the unique identification number identifying constructors';
 COMMENT ON COLUMN constructors.constructorRef IS 'Constructor Reference name';
 COMMENT ON COLUMN constructors."name" IS 'full name of the constructor';
@@ -37,7 +30,6 @@ COMMENT ON COLUMN constructors.nationality IS 'nationality of the constructor';
 COMMENT ON COLUMN constructors.url IS 'the introduction website of the constructor';
 ALTER TABLE constructors MODIFY (url ANNOTATIONS (ADD value_description 'commonsense evidence: How to find out the detailed introduction of the constructor: through its url'));
 
--- Table: driverStandings
 COMMENT ON COLUMN driverStandings.driverStandingsId IS 'the unique identification number identifying driver standing records';
 COMMENT ON COLUMN driverStandings.raceId IS 'id number identifying which races';
 COMMENT ON COLUMN driverStandings.driverId IS 'id number identifying which drivers';
@@ -46,7 +38,6 @@ COMMENT ON COLUMN driverStandings."position" IS 'position or track of circuits';
 COMMENT ON COLUMN driverStandings.wins IS 'wins';
 ALTER TABLE driverStandings MODIFY (positionText ANNOTATIONS (ADD value_description 'same with position, not quite useful'));
 
--- Table: drivers
 COMMENT ON COLUMN drivers.driverId IS 'the unique identification number identifying each driver';
 COMMENT ON COLUMN drivers.driverRef IS 'driver reference name';
 COMMENT ON COLUMN drivers."number" IS 'number';
@@ -58,7 +49,6 @@ COMMENT ON COLUMN drivers.dob IS 'date of birth';
 COMMENT ON COLUMN drivers.nationality IS 'nationality of drivers';
 COMMENT ON COLUMN drivers.url IS 'the introduction website of the drivers';
 
--- Table: lapTimes
 COMMENT ON COLUMN lapTimes.raceId IS 'the identification number identifying race';
 COMMENT ON COLUMN lapTimes.driverId IS 'the identification number identifying each driver';
 COMMENT ON COLUMN lapTimes.lap IS 'lap number';
@@ -67,7 +57,6 @@ COMMENT ON COLUMN lapTimes."time" IS 'lap time';
 ALTER TABLE lapTimes MODIFY ("time" ANNOTATIONS (ADD value_description 'in minutes / seconds / ...'));
 COMMENT ON COLUMN lapTimes.milliseconds IS 'milliseconds';
 
--- Table: pitStops
 COMMENT ON COLUMN pitStops.raceId IS 'the identification number identifying race';
 COMMENT ON COLUMN pitStops.driverId IS 'the identification number identifying each driver';
 COMMENT ON COLUMN pitStops."stop" IS 'stop number';
@@ -78,7 +67,6 @@ COMMENT ON COLUMN pitStops.duration IS 'duration time';
 ALTER TABLE pitStops MODIFY (duration ANNOTATIONS (ADD value_description 'seconds/'));
 COMMENT ON COLUMN pitStops.milliseconds IS 'milliseconds';
 
--- Table: qualifying
 COMMENT ON COLUMN qualifying.qualifyId IS 'the unique identification number identifying qualifying';
 ALTER TABLE qualifying MODIFY (qualifyId ANNOTATIONS (ADD value_description 'How does F1 Sprint qualifying work? Sprint qualifying is essentially a short-form Grand Prix  a race that is one-third the number of laps of the main event on Sunday. However, the drivers are battling for positions on the grid for the start of Sunday''s race.'));
 COMMENT ON COLUMN qualifying.raceId IS 'the identification number identifying each race';
@@ -93,7 +81,6 @@ ALTER TABLE qualifying MODIFY (q2 ANNOTATIONS (ADD value_description 'in minutes
 COMMENT ON COLUMN qualifying.q3 IS 'time in qualifying 3';
 ALTER TABLE qualifying MODIFY (q3 ANNOTATIONS (ADD value_description 'in minutes / seconds / ... commonsense evidence: only top 10 in the q2 has the record of q3'));
 
--- Table: races
 COMMENT ON COLUMN races.raceId IS 'the unique identification number identifying the race';
 COMMENT ON COLUMN races."year" IS 'year';
 COMMENT ON COLUMN races.round IS 'round';
@@ -103,7 +90,6 @@ COMMENT ON COLUMN races."date" IS 'duration time';
 COMMENT ON COLUMN races."time" IS 'time of the location';
 COMMENT ON COLUMN races.url IS 'introduction of races';
 
--- Table: results
 COMMENT ON COLUMN results.resultId IS 'the unique identification number identifying race result';
 COMMENT ON COLUMN results.raceId IS 'the identification number identifying the race';
 COMMENT ON COLUMN results.driverId IS 'the identification number identifying the driver';
@@ -128,10 +114,8 @@ ALTER TABLE results MODIFY (fastestLapSpeed ANNOTATIONS (ADD value_description '
 COMMENT ON COLUMN results.statusId IS 'status ID';
 ALTER TABLE results MODIFY (statusId ANNOTATIONS (ADD value_description 'its category description appear in the table status'));
 
--- Table: seasons
 COMMENT ON COLUMN seasons."year" IS 'the unique identification number identifying the race';
 COMMENT ON COLUMN seasons.url IS 'website link of season race introduction';
 
--- Table: status
 COMMENT ON COLUMN "status".statusId IS 'the unique identification number identifying status';
 COMMENT ON COLUMN "status"."status" IS 'full name of status';

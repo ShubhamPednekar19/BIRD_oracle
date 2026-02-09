@@ -1,7 +1,3 @@
--- Oracle Metadata for thrombosis_prediction
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: Examination
 COMMENT ON COLUMN Examination.ID IS 'identification of the patient';
 COMMENT ON COLUMN Examination."Examination Date" IS 'Examination Date';
 COMMENT ON COLUMN Examination."aCL IgG" IS 'anti-Cardiolipin antibody (IgG) concentration';
@@ -20,7 +16,6 @@ COMMENT ON COLUMN Examination.Symptoms IS 'other symptoms observed';
 COMMENT ON COLUMN Examination.Thrombosis IS 'degree of thrombosis';
 ALTER TABLE Examination MODIFY (Thrombosis ANNOTATIONS (ADD value_description '0: negative (no thrombosis)1: positive (the most serious)2: positive (severe)3: positive (mild)'));
 
--- Table: Laboratory
 COMMENT ON COLUMN Laboratory.ID IS 'identification of the patient';
 COMMENT ON COLUMN Laboratory."Date" IS 'Date of the laboratory tests (YYMMDD)';
 COMMENT ON COLUMN Laboratory.GOT IS 'AST glutamic oxaloacetic transaminase';
@@ -102,7 +97,6 @@ ALTER TABLE Laboratory MODIFY (DNA ANNOTATIONS (ADD value_description 'Commonsen
 COMMENT ON COLUMN Laboratory."DNA-II" IS 'anti-DNA';
 ALTER TABLE Laboratory MODIFY ("DNA-II" ANNOTATIONS (ADD value_description 'Commonsense evidence:Normal range: N < 8'));
 
--- Table: Patient
 COMMENT ON COLUMN Patient.ID IS 'identification of the patient';
 COMMENT ON COLUMN Patient.SEX IS 'Sex';
 ALTER TABLE Patient MODIFY (SEX ANNOTATIONS (ADD value_description 'F: female; M: male'));
