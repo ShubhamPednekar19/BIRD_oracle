@@ -56,8 +56,8 @@ COMMENT ON COLUMN posts.LastEditorDisplayName IS 'the display name of the last e
 
 COMMENT ON COLUMN tags.Id IS 'the tag id';
 COMMENT ON COLUMN tags.TagName IS 'the name of the tag';
-COMMENT ON COLUMN tags.Count IS 'the count of posts that contain this tag';
-ALTER TABLE tags MODIFY (Count ANNOTATIONS (ADD value_description 'more counts --> this tag is more popular'));
+COMMENT ON COLUMN tags."Count" IS 'the count of posts that contain this tag';
+ALTER TABLE tags MODIFY ("Count" ANNOTATIONS (ADD value_description 'more counts --> this tag is more popular'));
 COMMENT ON COLUMN tags.ExcerptPostId IS 'the excerpt post id of the tag';
 COMMENT ON COLUMN tags.WikiPostId IS 'the wiki post id of the tag';
 
@@ -68,7 +68,7 @@ COMMENT ON COLUMN users.CreationDate IS 'the creation date of the user account';
 COMMENT ON COLUMN users.DisplayName IS 'the user''s display name';
 COMMENT ON COLUMN users.LastAccessDate IS 'the last access date of the user account';
 COMMENT ON COLUMN users.WebsiteUrl IS 'the website url of the user account';
-COMMENT ON COLUMN users.Location IS 'user''s location';
+COMMENT ON COLUMN users."Location" IS 'user''s location';
 COMMENT ON COLUMN users.AboutMe IS 'the self introduction of the user';
 COMMENT ON COLUMN users.Views IS 'the number of views';
 COMMENT ON COLUMN users.UpVotes IS 'the number of upvotes';

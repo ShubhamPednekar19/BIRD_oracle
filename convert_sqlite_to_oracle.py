@@ -436,6 +436,8 @@ def convert_table_to_oracle(parsed_table: Dict) -> Tuple[str, List[Tuple[str, st
                 parts.append("DEFAULT SYSTIMESTAMP")
             elif default_val.upper() == 'CURRENT_DATE':
                 parts.append("DEFAULT SYSDATE")
+            elif default_val.strip("'") == '0000-00-00':
+                parts.append("DEFAULT DATE '0001-01-01'")
             else:
                 parts.append(f"DEFAULT {default_val}")
 

@@ -259,5 +259,4 @@ ALTER TABLE "Match" ADD CONSTRAINT FK_MATCH_23 FOREIGN KEY (away_player_10) REFE
 ALTER TABLE "Match" ADD CONSTRAINT FK_MATCH_24 FOREIGN KEY (away_player_11) REFERENCES Player (player_api_id);
 ALTER TABLE Player_Attributes ADD CONSTRAINT FK_PLAYER_ATTRIBUTES_1 FOREIGN KEY (player_fifa_api_id) REFERENCES Player (player_fifa_api_id);
 ALTER TABLE Player_Attributes ADD CONSTRAINT FK_PLAYER_ATTRIBUTES_2 FOREIGN KEY (player_api_id) REFERENCES Player (player_api_id);
-ALTER TABLE Team_Attributes ADD CONSTRAINT FK_TEAM_ATTRIBUTES_1 FOREIGN KEY (team_fifa_api_id) REFERENCES Team (team_fifa_api_id);
 ALTER TABLE Team_Attributes ADD CONSTRAINT FK_TEAM_ATTRIBUTES_2 FOREIGN KEY (team_api_id) REFERENCES Team (team_api_id);
