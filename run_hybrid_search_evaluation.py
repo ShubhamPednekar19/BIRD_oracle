@@ -1879,6 +1879,12 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             num_expected_columns=len(expected_columns)
         )
 
+        # Always populate expected JSON (known before calling Oracle)
+        result.expected_json = json.dumps([
+            {'table': o.table_name, 'columns': o.columns}
+            for o in expected_objs
+        ])
+
         # Call discover_objects
         try:
             discovered, exec_time = oracle_mgr.discover_objects(
@@ -1891,6 +1897,13 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             result.execution_time_ms = exec_time
 
             if discovered is not None:
+                # Populate discovered JSON
+                result.discovered_json = json.dumps([
+                    {'table': d.object_name, 'score': round(d.score, 4),
+                     'columns': [col['name'] for col in d.columns]}
+                    for d in discovered
+                ])
+
                 # Evaluate results
                 metrics = evaluate_result(expected_objs, discovered)
 
@@ -1929,10 +1942,6 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
                 # Top-N Accuracy
                 result.topn_table_accuracy = metrics['topn_table_accuracy']
                 result.topn_column_accuracy = metrics['topn_column_accuracy']
-
-                # Structured JSON
-                result.expected_json = metrics['expected_json']
-                result.discovered_json = metrics['discovered_json']
             else:
                 result.error = "discover_objects returned None"
 
