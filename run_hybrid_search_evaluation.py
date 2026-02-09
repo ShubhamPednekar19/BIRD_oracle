@@ -139,6 +139,14 @@ class EvaluationResult:
     joint_column_recall: float = 0.0
     joint_column_f1: float = 0.0
 
+    # Top-N Accuracy (positional: check top-N slots where N = num expected)
+    topn_table_accuracy: float = 0.0
+    topn_column_accuracy: float = 0.0
+
+    # Structured JSON for detailed inspection
+    expected_json: str = ""
+    discovered_json: str = ""
+
     error: Optional[str] = None
 
 
@@ -171,6 +179,10 @@ class DatabaseSummary:
     avg_joint_column_precision: float = 0.0
     avg_joint_column_recall: float = 0.0
     avg_joint_column_f1: float = 0.0
+
+    # Top-N Accuracy
+    avg_topn_table_accuracy: float = 0.0
+    avg_topn_column_accuracy: float = 0.0
 
     # Hit rates
     table_hit_at_1_rate: float = 0.0
@@ -932,6 +944,66 @@ def calculate_joint_column_metrics(
     return precision, recall, f1
 
 
+def calculate_topn_accuracy(
+    expected_tables: List['ExpectedObject'],
+    discovered: List['DiscoveredObject']
+) -> Tuple[float, float]:
+    """
+    Top-N Accuracy: check only the top-N discovered slots where N equals
+    the number of expected items, giving a positional accuracy measure.
+
+    Table accuracy:
+        N = number of expected tables.
+        Look at the first N discovered tables.
+        accuracy = |expected ∩ top-N discovered| / N
+
+    Column accuracy (per matched table):
+        For each discovered table that matches an expected table,
+        M = number of expected columns for that table.
+        Look at the first M discovered columns for that table.
+        accuracy = |expected_cols ∩ top-M discovered_cols| / M
+        Final score is the average across all expected tables that were
+        discovered (0 contribution for tables not discovered).
+
+    Returns:
+        Tuple of (table_accuracy, column_accuracy)
+    """
+    # --- Table accuracy ---
+    n = len(expected_tables)
+    if n == 0:
+        return 0.0, 0.0
+
+    expected_table_names = {t.table_name.lower() for t in expected_tables}
+    top_n_discovered = [d.object_name.lower() for d in discovered[:n]]
+    table_hits = len(expected_table_names & set(top_n_discovered))
+    table_accuracy = table_hits / n
+
+    # --- Column accuracy (per expected table) ---
+    # Build map: discovered table (lower) -> ordered list of column names
+    discovered_table_cols = {}
+    for d in discovered:
+        discovered_table_cols[d.object_name.lower()] = [
+            col['name'].lower() for col in d.columns
+        ]
+
+    col_scores = []
+    for exp_table in expected_tables:
+        t_lower = exp_table.table_name.lower()
+        exp_cols = {c.lower() for c in exp_table.columns}
+        m = len(exp_cols)
+        if m == 0:
+            continue
+        if t_lower in discovered_table_cols:
+            top_m_cols = set(discovered_table_cols[t_lower][:m])
+            col_scores.append(len(exp_cols & top_m_cols) / m)
+        else:
+            col_scores.append(0.0)
+
+    column_accuracy = sum(col_scores) / len(col_scores) if col_scores else 0.0
+
+    return table_accuracy, column_accuracy
+
+
 def evaluate_result(expected_tables: List[ExpectedObject],
                    discovered: List[DiscoveredObject]) -> Dict:
     """
@@ -990,6 +1062,27 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         expected_tables, discovered
     )
 
+    # Top-N Accuracy (positional)
+    topn_table_acc, topn_col_acc = calculate_topn_accuracy(
+        expected_tables, discovered
+    )
+
+    # Build structured JSON for expected and discovered
+    expected_json_data = []
+    for t in expected_tables:
+        expected_json_data.append({
+            'table': t.table_name,
+            'columns': t.columns
+        })
+
+    discovered_json_data = []
+    for d in discovered:
+        discovered_json_data.append({
+            'table': d.object_name,
+            'score': round(d.score, 4),
+            'columns': [col['name'] for col in d.columns]
+        })
+
     return {
         # Basic metrics
         'table_precision': table_p,
@@ -1018,6 +1111,14 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         'joint_column_precision': joint_col_p,
         'joint_column_recall': joint_col_r,
         'joint_column_f1': joint_col_f1,
+
+        # Top-N Accuracy
+        'topn_table_accuracy': topn_table_acc,
+        'topn_column_accuracy': topn_col_acc,
+
+        # Structured JSON
+        'expected_json': json.dumps(expected_json_data),
+        'discovered_json': json.dumps(discovered_json_data),
 
         # Raw data
         'discovered_tables': discovered_table_names,
@@ -1098,6 +1199,8 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
         'table_mrr', 'table_jaccard', 'table_exact_match',
         # Joint table-column metrics
         'joint_column_precision', 'joint_column_recall', 'joint_column_f1',
+        # Top-N Accuracy
+        'topn_table_accuracy', 'topn_column_accuracy',
         'error'
     ]
 
@@ -1140,6 +1243,9 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
                 'joint_column_precision': f"{result.joint_column_precision:.4f}",
                 'joint_column_recall': f"{result.joint_column_recall:.4f}",
                 'joint_column_f1': f"{result.joint_column_f1:.4f}",
+                # Top-N Accuracy
+                'topn_table_accuracy': f"{result.topn_table_accuracy:.4f}",
+                'topn_column_accuracy': f"{result.topn_column_accuracy:.4f}",
                 'error': result.error or ''
             }
             writer.writerow(row)
@@ -1162,7 +1268,9 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
         # Advanced metrics
         'avg_table_mrr', 'avg_table_jaccard', 'table_exact_match_rate',
         # Joint table-column metrics
-        'avg_joint_column_precision', 'avg_joint_column_recall', 'avg_joint_column_f1'
+        'avg_joint_column_precision', 'avg_joint_column_recall', 'avg_joint_column_f1',
+        # Top-N Accuracy
+        'avg_topn_table_accuracy', 'avg_topn_column_accuracy'
     ]
 
     with open(filepath, 'w', newline='', encoding='utf-8') as f:
@@ -1199,6 +1307,9 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
                 'avg_joint_column_precision': f"{summary.avg_joint_column_precision:.4f}",
                 'avg_joint_column_recall': f"{summary.avg_joint_column_recall:.4f}",
                 'avg_joint_column_f1': f"{summary.avg_joint_column_f1:.4f}",
+                # Top-N Accuracy
+                'avg_topn_table_accuracy': f"{summary.avg_topn_table_accuracy:.4f}",
+                'avg_topn_column_accuracy': f"{summary.avg_topn_column_accuracy:.4f}",
             }
             writer.writerow(row)
 
@@ -1246,6 +1357,10 @@ def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSu
         summary.avg_joint_column_recall = sum(r.joint_column_recall for r in successful) / n
         summary.avg_joint_column_f1 = sum(r.joint_column_f1 for r in successful) / n
 
+        # Top-N Accuracy
+        summary.avg_topn_table_accuracy = sum(r.topn_table_accuracy for r in successful) / n
+        summary.avg_topn_column_accuracy = sum(r.topn_column_accuracy for r in successful) / n
+
     return summary
 
 
@@ -1288,6 +1403,8 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{s.avg_table_precision:.4f}</td>"
             f"<td>{s.avg_table_recall:.4f}</td>"
             f"<td>{s.avg_table_f1:.4f}</td>"
+            f"<td>{s.avg_column_precision:.4f}</td>"
+            f"<td>{s.avg_column_recall:.4f}</td>"
             f"<td>{s.avg_column_f1:.4f}</td>"
             f"<td>{s.table_hit_at_1_rate:.2%}</td>"
             f"<td>{s.table_hit_at_3_rate:.2%}</td>"
@@ -1296,10 +1413,12 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{s.avg_table_jaccard:.4f}</td>"
             f"<td>{s.table_exact_match_rate:.2%}</td>"
             f"<td>{s.avg_joint_column_f1:.4f}</td>"
+            f"<td>{s.avg_topn_table_accuracy:.2%}</td>"
+            f"<td>{s.avg_topn_column_accuracy:.2%}</td>"
             f"</tr>\n"
         )
 
-    # --- Build results table rows ---
+    # --- Build results table rows (with data attrs for hover popup) ---
     result_rows = ""
     for r in results:
         error_class = ' class="error-row"' if r.error else ''
@@ -1312,22 +1431,32 @@ def generate_results_html(results: List[EvaluationResult],
             else:
                 f1_class = ' class="poor"'
 
+        # Escape JSON for safe embedding in HTML data attributes
+        esc_expected = html.escape(r.expected_json or '[]')
+        esc_discovered = html.escape(r.discovered_json or '[]')
+        esc_question = html.escape(r.question)
+
         result_rows += (
-            f"<tr{error_class}>"
+            f'<tr{error_class} data-question="{esc_question}" '
+            f'data-expected="{esc_expected}" data-discovered="{esc_discovered}">'
             f"<td>{r.question_id}</td>"
             f"<td>{html.escape(r.db_id)}</td>"
-            f"<td class='question-col'>{html.escape(r.question[:150])}</td>"
+            f"<td class='question-col'>{html.escape(r.question[:120])}</td>"
             f"<td>{r.execution_time_ms:.1f}</td>"
             f"<td>{', '.join(r.expected_tables)}</td>"
             f"<td>{', '.join(r.discovered_tables)}</td>"
             f"<td{f1_class}>{r.table_precision:.4f}</td>"
             f"<td{f1_class}>{r.table_recall:.4f}</td>"
             f"<td{f1_class}>{r.table_f1:.4f}</td>"
+            f"<td>{r.column_precision:.4f}</td>"
+            f"<td>{r.column_recall:.4f}</td>"
             f"<td>{r.column_f1:.4f}</td>"
             f"<td>{'Y' if r.table_hit_at_1 else 'N'}</td>"
             f"<td>{'Y' if r.table_hit_at_3 else 'N'}</td>"
             f"<td>{'Y' if r.table_hit_at_5 else 'N'}</td>"
             f"<td>{r.table_mrr:.4f}</td>"
+            f"<td>{r.topn_table_accuracy:.2%}</td>"
+            f"<td>{r.topn_column_accuracy:.2%}</td>"
             f"<td>{html.escape(r.error or '')}</td>"
             f"</tr>\n"
         )
@@ -1356,7 +1485,6 @@ def generate_results_html(results: List[EvaluationResult],
     background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5;
   }}
   h1 {{ color: var(--heading); margin-bottom: 6px; font-size: 1.8rem; }}
-  h2 {{ color: var(--heading); margin: 28px 0 12px 0; font-size: 1.3rem; border-bottom: 2px solid var(--accent); padding-bottom: 4px; display: inline-block; }}
   .timestamp {{ color: #747d8c; font-size: 0.9rem; margin-bottom: 20px; }}
   .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 16px 0; }}
   .card {{
@@ -1366,16 +1494,17 @@ def generate_results_html(results: List[EvaluationResult],
   .card .value {{ font-size: 2rem; font-weight: 700; color: var(--accent); }}
   .card .label {{ font-size: 0.82rem; color: #747d8c; margin-top: 4px; }}
   .section {{ background: var(--card-bg); border-radius: 8px; padding: 20px; margin: 16px 0; box-shadow: 0 1px 4px rgba(0,0,0,0.08); border: 1px solid var(--border); overflow-x: auto; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
-  th {{ background: #f1f2f6; text-align: left; padding: 10px 8px; border-bottom: 2px solid var(--border); position: sticky; top: 0; white-space: nowrap; }}
-  td {{ padding: 8px; border-bottom: 1px solid var(--border); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
+  th {{ background: #f1f2f6; text-align: left; padding: 10px 6px; border-bottom: 2px solid var(--border); position: sticky; top: 0; white-space: nowrap; font-size: 0.78rem; }}
+  td {{ padding: 7px 6px; border-bottom: 1px solid var(--border); }}
   tr:hover {{ background: #f1f2f6; }}
   .error-row {{ background: #ffe0e3; }}
   .error-row:hover {{ background: #ffc9ce; }}
   .good {{ color: var(--good); font-weight: 600; }}
   .fair {{ color: var(--fair); font-weight: 600; }}
   .poor {{ color: var(--poor); font-weight: 600; }}
-  .question-col {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .question-col {{ max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }}
+  .question-col:hover {{ color: var(--accent); }}
   .params-table {{ max-width: 600px; }}
   .params-table td:first-child {{ font-weight: 600; width: 220px; }}
   .filter-bar {{ margin: 12px 0; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
@@ -1396,6 +1525,29 @@ def generate_results_html(results: List[EvaluationResult],
     background: #dfe6e9; padding: 10px 16px; border-radius: 6px; font-size: 0.85rem;
     margin-top: 24px; color: #636e72;
   }}
+
+  /* Hover detail popup */
+  #detailPopup {{
+    display: none; position: fixed; z-index: 999;
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.18); padding: 20px; max-width: 620px; max-height: 80vh;
+    overflow-y: auto; font-size: 0.85rem;
+  }}
+  #detailPopup.visible {{ display: block; }}
+  #detailPopup h3 {{ margin: 0 0 10px 0; font-size: 1rem; color: var(--heading); }}
+  #detailPopup .popup-section {{ margin-bottom: 14px; }}
+  #detailPopup .popup-label {{ font-weight: 700; color: #636e72; font-size: 0.78rem; text-transform: uppercase; margin-bottom: 4px; }}
+  #detailPopup .popup-question {{ background: #f1f2f6; padding: 8px 12px; border-radius: 6px; line-height: 1.6; word-break: break-word; }}
+  #detailPopup .json-block {{
+    background: #2f3542; color: #dfe6e9; padding: 10px 12px; border-radius: 6px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.8rem;
+    white-space: pre-wrap; word-break: break-word; max-height: 250px; overflow-y: auto;
+  }}
+  #detailPopup .close-btn {{
+    position: absolute; top: 8px; right: 12px; cursor: pointer;
+    font-size: 1.2rem; color: #747d8c; background: none; border: none;
+  }}
+  #detailPopup .close-btn:hover {{ color: var(--poor); }}
 </style>
 </head>
 <body>
@@ -1433,9 +1585,12 @@ def generate_results_html(results: List[EvaluationResult],
   <table>
     <tr>
       <th>Database</th><th>Questions</th><th>Success</th><th>Failed</th>
-      <th>Avg Time (ms)</th><th>Table P</th><th>Table R</th><th>Table F1</th>
-      <th>Col F1</th><th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
+      <th>Avg Time (ms)</th>
+      <th>Table P</th><th>Table R</th><th>Table F1</th>
+      <th>Col P</th><th>Col R</th><th>Col F1</th>
+      <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
       <th>MRR</th><th>Jaccard</th><th>Exact Match</th><th>Joint Col F1</th>
+      <th>Top-N Tbl</th><th>Top-N Col</th>
     </tr>
     {summary_rows}
   </table>
@@ -1456,8 +1611,11 @@ def generate_results_html(results: List[EvaluationResult],
       <tr>
         <th>ID</th><th>Database</th><th>Question</th><th>Time (ms)</th>
         <th>Expected Tables</th><th>Discovered Tables</th>
-        <th>Table P</th><th>Table R</th><th>Table F1</th><th>Col F1</th>
-        <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th><th>MRR</th><th>Error</th>
+        <th>Table P</th><th>Table R</th><th>Table F1</th>
+        <th>Col P</th><th>Col R</th><th>Col F1</th>
+        <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th><th>MRR</th>
+        <th>Top-N Tbl</th><th>Top-N Col</th>
+        <th>Error</th>
       </tr>
     </thead>
     <tbody>
@@ -1466,8 +1624,26 @@ def generate_results_html(results: List[EvaluationResult],
   </table>
 </div>
 
+<!-- Hover detail popup -->
+<div id="detailPopup">
+  <button class="close-btn" onclick="hidePopup()">&times;</button>
+  <h3 id="popupTitle">Question Details</h3>
+  <div class="popup-section">
+    <div class="popup-label">Full Question</div>
+    <div class="popup-question" id="popupQuestion"></div>
+  </div>
+  <div class="popup-section">
+    <div class="popup-label">Expected (tables &amp; columns)</div>
+    <div class="json-block" id="popupExpected"></div>
+  </div>
+  <div class="popup-section">
+    <div class="popup-label">Discovered (tables, scores &amp; columns)</div>
+    <div class="json-block" id="popupDiscovered"></div>
+  </div>
+</div>
+
 <div class="server-note">
-  Press <strong>Ctrl+C</strong> in the terminal to stop the server.
+  Press <strong>Ctrl+C</strong> in the terminal to stop the server. Click on a question to view expected vs discovered details.
 </div>
 
 <script>
@@ -1506,6 +1682,64 @@ def generate_results_html(results: List[EvaluationResult],
       row.style.display = show ? '' : 'none';
     }});
   }}
+
+  // Detail popup logic
+  const popup = document.getElementById('detailPopup');
+
+  function showPopup(row, evt) {{
+    const question = row.dataset.question || '';
+    const expected = row.dataset.expected || '[]';
+    const discovered = row.dataset.discovered || '[]';
+
+    document.getElementById('popupQuestion').textContent = question;
+
+    try {{
+      document.getElementById('popupExpected').textContent = JSON.stringify(JSON.parse(expected), null, 2);
+    }} catch(e) {{
+      document.getElementById('popupExpected').textContent = expected;
+    }}
+    try {{
+      document.getElementById('popupDiscovered').textContent = JSON.stringify(JSON.parse(discovered), null, 2);
+    }} catch(e) {{
+      document.getElementById('popupDiscovered').textContent = discovered;
+    }}
+
+    // Position near click but keep on screen
+    let x = evt.clientX + 16;
+    let y = evt.clientY - 20;
+    if (x + 640 > window.innerWidth) x = window.innerWidth - 650;
+    if (x < 10) x = 10;
+    if (y + 400 > window.innerHeight) y = window.innerHeight - 420;
+    if (y < 10) y = 10;
+    popup.style.left = x + 'px';
+    popup.style.top = y + 'px';
+    popup.classList.add('visible');
+  }}
+
+  function hidePopup() {{
+    popup.classList.remove('visible');
+  }}
+
+  // Attach click handlers to question cells
+  document.querySelectorAll('#resultsTable tbody tr').forEach(row => {{
+    const qCell = row.children[2];
+    if (qCell) {{
+      qCell.addEventListener('click', function(e) {{
+        e.stopPropagation();
+        showPopup(row, e);
+      }});
+    }}
+  }});
+
+  // Close popup when clicking outside
+  document.addEventListener('click', function(e) {{
+    if (!popup.contains(e.target)) hidePopup();
+  }});
+
+  // Close popup with Escape key
+  document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') hidePopup();
+  }});
 </script>
 </body>
 </html>"""
@@ -1691,6 +1925,14 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
                 result.joint_column_precision = metrics['joint_column_precision']
                 result.joint_column_recall = metrics['joint_column_recall']
                 result.joint_column_f1 = metrics['joint_column_f1']
+
+                # Top-N Accuracy
+                result.topn_table_accuracy = metrics['topn_table_accuracy']
+                result.topn_column_accuracy = metrics['topn_column_accuracy']
+
+                # Structured JSON
+                result.expected_json = metrics['expected_json']
+                result.discovered_json = metrics['discovered_json']
             else:
                 result.error = "discover_objects returned None"
 
