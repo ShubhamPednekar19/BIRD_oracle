@@ -1079,7 +1079,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
     for d in discovered:
         discovered_json_data.append({
             'table': d.object_name,
-            'score': round(d.score, 4),
+            'score': round(float(d.score), 4),
             'columns': [col['name'] for col in d.columns]
         })
 
@@ -1899,7 +1899,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             if discovered is not None:
                 # Populate discovered JSON
                 result.discovered_json = json.dumps([
-                    {'table': d.object_name, 'score': round(d.score, 4),
+                    {'table': d.object_name, 'score': round(float(d.score), 4),
                      'columns': [col['name'] for col in d.columns]}
                     for d in discovered
                 ])
