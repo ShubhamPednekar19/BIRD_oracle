@@ -22,7 +22,7 @@ COMMENT ON COLUMN event.event_date IS 'The date the event took place or is sched
 ALTER TABLE event MODIFY (event_date ANNOTATIONS (ADD value_description 'e.g. 2020-03-10T12:00:00'));
 COMMENT ON COLUMN event."type" IS 'The kind of event, such as game, social, election';
 COMMENT ON COLUMN event.notes IS 'A free text field for any notes about the event';
-COMMENT ON COLUMN event.location IS 'Address where the event was held or is to be held or the name of such a location';
+COMMENT ON COLUMN event."location" IS 'Address where the event was held or is to be held or the name of such a location';
 COMMENT ON COLUMN event."status" IS 'One of three values indicating if the event is in planning, is opened, or is closed';
 ALTER TABLE event MODIFY ("status" ANNOTATIONS (ADD value_description 'Open/ Closed/ Planning'));
 
