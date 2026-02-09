@@ -24,16 +24,20 @@ Requirements:
 
 import argparse
 import csv
+import html
 import json
 import os
 import re
+import signal
 import sys
+import threading
 import time
+import webbrowser
 from dataclasses import dataclass, field
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
-from typing import List
 
 try:
     import oracledb
@@ -1246,6 +1250,313 @@ def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSu
 
 
 # ============================================================================
+# Browser Visualization
+# ============================================================================
+
+def generate_results_html(results: List[EvaluationResult],
+                          summaries: List[DatabaseSummary],
+                          run_params: Dict) -> str:
+    """Generate a self-contained HTML page with evaluation results, summary, and run parameters."""
+
+    timestamp = run_params.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+    # --- Overall stats ---
+    total_questions = sum(s.total_questions for s in summaries)
+    total_successful = sum(s.successful_queries for s in summaries)
+    total_failed = total_questions - total_successful
+    overall_f1 = 0.0
+    overall_hit1 = 0.0
+    if total_successful > 0:
+        overall_f1 = sum(s.avg_table_f1 * s.successful_queries for s in summaries) / total_successful
+        overall_hit1 = sum(s.table_hit_at_1_rate * s.successful_queries for s in summaries) / total_successful
+
+    # --- Build params table rows ---
+    param_rows = ""
+    for key, val in run_params.items():
+        param_rows += f"<tr><td>{html.escape(str(key))}</td><td>{html.escape(str(val))}</td></tr>\n"
+
+    # --- Build summary table rows ---
+    summary_rows = ""
+    for s in summaries:
+        summary_rows += (
+            f"<tr>"
+            f"<td>{html.escape(s.db_id)}</td>"
+            f"<td>{s.total_questions}</td>"
+            f"<td>{s.successful_queries}</td>"
+            f"<td>{s.failed_queries}</td>"
+            f"<td>{s.avg_execution_time_ms:.2f}</td>"
+            f"<td>{s.avg_table_precision:.4f}</td>"
+            f"<td>{s.avg_table_recall:.4f}</td>"
+            f"<td>{s.avg_table_f1:.4f}</td>"
+            f"<td>{s.avg_column_f1:.4f}</td>"
+            f"<td>{s.table_hit_at_1_rate:.2%}</td>"
+            f"<td>{s.table_hit_at_3_rate:.2%}</td>"
+            f"<td>{s.table_hit_at_5_rate:.2%}</td>"
+            f"<td>{s.avg_table_mrr:.4f}</td>"
+            f"<td>{s.avg_table_jaccard:.4f}</td>"
+            f"<td>{s.table_exact_match_rate:.2%}</td>"
+            f"<td>{s.avg_joint_column_f1:.4f}</td>"
+            f"</tr>\n"
+        )
+
+    # --- Build results table rows ---
+    result_rows = ""
+    for r in results:
+        error_class = ' class="error-row"' if r.error else ''
+        f1_class = ""
+        if r.error is None:
+            if r.table_f1 >= 0.8:
+                f1_class = ' class="good"'
+            elif r.table_f1 >= 0.5:
+                f1_class = ' class="fair"'
+            else:
+                f1_class = ' class="poor"'
+
+        result_rows += (
+            f"<tr{error_class}>"
+            f"<td>{r.question_id}</td>"
+            f"<td>{html.escape(r.db_id)}</td>"
+            f"<td class='question-col'>{html.escape(r.question[:150])}</td>"
+            f"<td>{r.execution_time_ms:.1f}</td>"
+            f"<td>{', '.join(r.expected_tables)}</td>"
+            f"<td>{', '.join(r.discovered_tables)}</td>"
+            f"<td{f1_class}>{r.table_precision:.4f}</td>"
+            f"<td{f1_class}>{r.table_recall:.4f}</td>"
+            f"<td{f1_class}>{r.table_f1:.4f}</td>"
+            f"<td>{r.column_f1:.4f}</td>"
+            f"<td>{'Y' if r.table_hit_at_1 else 'N'}</td>"
+            f"<td>{'Y' if r.table_hit_at_3 else 'N'}</td>"
+            f"<td>{'Y' if r.table_hit_at_5 else 'N'}</td>"
+            f"<td>{r.table_mrr:.4f}</td>"
+            f"<td>{html.escape(r.error or '')}</td>"
+            f"</tr>\n"
+        )
+
+    page_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hybrid Search Evaluation Results</title>
+<style>
+  :root {{
+    --bg: #f5f6fa;
+    --card-bg: #fff;
+    --border: #dfe4ea;
+    --text: #2f3542;
+    --heading: #1e272e;
+    --accent: #3742fa;
+    --good: #2ed573;
+    --fair: #ffa502;
+    --poor: #ff4757;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+    background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5;
+  }}
+  h1 {{ color: var(--heading); margin-bottom: 6px; font-size: 1.8rem; }}
+  h2 {{ color: var(--heading); margin: 28px 0 12px 0; font-size: 1.3rem; border-bottom: 2px solid var(--accent); padding-bottom: 4px; display: inline-block; }}
+  .timestamp {{ color: #747d8c; font-size: 0.9rem; margin-bottom: 20px; }}
+  .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 16px 0; }}
+  .card {{
+    background: var(--card-bg); border-radius: 8px; padding: 18px; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08); border: 1px solid var(--border);
+  }}
+  .card .value {{ font-size: 2rem; font-weight: 700; color: var(--accent); }}
+  .card .label {{ font-size: 0.82rem; color: #747d8c; margin-top: 4px; }}
+  .section {{ background: var(--card-bg); border-radius: 8px; padding: 20px; margin: 16px 0; box-shadow: 0 1px 4px rgba(0,0,0,0.08); border: 1px solid var(--border); overflow-x: auto; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
+  th {{ background: #f1f2f6; text-align: left; padding: 10px 8px; border-bottom: 2px solid var(--border); position: sticky; top: 0; white-space: nowrap; }}
+  td {{ padding: 8px; border-bottom: 1px solid var(--border); }}
+  tr:hover {{ background: #f1f2f6; }}
+  .error-row {{ background: #ffe0e3; }}
+  .error-row:hover {{ background: #ffc9ce; }}
+  .good {{ color: var(--good); font-weight: 600; }}
+  .fair {{ color: var(--fair); font-weight: 600; }}
+  .poor {{ color: var(--poor); font-weight: 600; }}
+  .question-col {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .params-table {{ max-width: 600px; }}
+  .params-table td:first-child {{ font-weight: 600; width: 220px; }}
+  .filter-bar {{ margin: 12px 0; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
+  .filter-bar label {{ font-weight: 600; font-size: 0.85rem; }}
+  .filter-bar select, .filter-bar input {{
+    padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem;
+  }}
+  .filter-bar input[type="text"] {{ width: 240px; }}
+  .tab-bar {{ display: flex; gap: 0; margin-bottom: -1px; position: relative; z-index: 1; }}
+  .tab {{
+    padding: 10px 24px; cursor: pointer; border: 1px solid var(--border); border-bottom: none;
+    background: #f1f2f6; border-radius: 8px 8px 0 0; font-size: 0.9rem; font-weight: 600;
+  }}
+  .tab.active {{ background: var(--card-bg); border-bottom: 1px solid var(--card-bg); }}
+  .tab-content {{ display: none; }}
+  .tab-content.active {{ display: block; }}
+  .server-note {{
+    background: #dfe6e9; padding: 10px 16px; border-radius: 6px; font-size: 0.85rem;
+    margin-top: 24px; color: #636e72;
+  }}
+</style>
+</head>
+<body>
+
+<h1>Oracle Hybrid Search Evaluation</h1>
+<div class="timestamp">Run: {html.escape(timestamp)}</div>
+
+<!-- Overall KPI cards -->
+<div class="cards">
+  <div class="card"><div class="value">{len(summaries)}</div><div class="label">Databases</div></div>
+  <div class="card"><div class="value">{total_questions}</div><div class="label">Total Questions</div></div>
+  <div class="card"><div class="value">{total_successful}</div><div class="label">Successful</div></div>
+  <div class="card"><div class="value">{total_failed}</div><div class="label">Failed</div></div>
+  <div class="card"><div class="value">{overall_f1:.4f}</div><div class="label">Overall Table F1</div></div>
+  <div class="card"><div class="value">{overall_hit1:.2%}</div><div class="label">Overall Hit@1</div></div>
+</div>
+
+<!-- Tabs -->
+<div class="tab-bar">
+  <div class="tab active" onclick="switchTab('params')">Run Parameters</div>
+  <div class="tab" onclick="switchTab('summary')">Database Summary</div>
+  <div class="tab" onclick="switchTab('results')">Detailed Results</div>
+</div>
+
+<!-- Tab: Run Parameters -->
+<div class="section tab-content active" id="tab-params">
+  <table class="params-table">
+    <tr><th>Parameter</th><th>Value</th></tr>
+    {param_rows}
+  </table>
+</div>
+
+<!-- Tab: Database Summary -->
+<div class="section tab-content" id="tab-summary">
+  <table>
+    <tr>
+      <th>Database</th><th>Questions</th><th>Success</th><th>Failed</th>
+      <th>Avg Time (ms)</th><th>Table P</th><th>Table R</th><th>Table F1</th>
+      <th>Col F1</th><th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
+      <th>MRR</th><th>Jaccard</th><th>Exact Match</th><th>Joint Col F1</th>
+    </tr>
+    {summary_rows}
+  </table>
+</div>
+
+<!-- Tab: Detailed Results -->
+<div class="section tab-content" id="tab-results">
+  <div class="filter-bar">
+    <label>Database:</label>
+    <select id="dbFilter" onchange="filterResults()">
+      <option value="">All</option>
+    </select>
+    <label>Search:</label>
+    <input type="text" id="searchFilter" placeholder="Filter by question..." oninput="filterResults()">
+  </div>
+  <table id="resultsTable">
+    <thead>
+      <tr>
+        <th>ID</th><th>Database</th><th>Question</th><th>Time (ms)</th>
+        <th>Expected Tables</th><th>Discovered Tables</th>
+        <th>Table P</th><th>Table R</th><th>Table F1</th><th>Col F1</th>
+        <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th><th>MRR</th><th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {result_rows}
+    </tbody>
+  </table>
+</div>
+
+<div class="server-note">
+  Press <strong>Ctrl+C</strong> in the terminal to stop the server.
+</div>
+
+<script>
+  // Tab switching
+  function switchTab(name) {{
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
+  }}
+
+  // Populate database filter dropdown
+  (function() {{
+    const rows = document.querySelectorAll('#resultsTable tbody tr');
+    const dbs = new Set();
+    rows.forEach(r => {{
+      const db = r.children[1]?.textContent;
+      if (db) dbs.add(db);
+    }});
+    const sel = document.getElementById('dbFilter');
+    [...dbs].sort().forEach(db => {{
+      const opt = document.createElement('option');
+      opt.value = db; opt.textContent = db;
+      sel.appendChild(opt);
+    }});
+  }})();
+
+  // Filter results table
+  function filterResults() {{
+    const db = document.getElementById('dbFilter').value.toLowerCase();
+    const q = document.getElementById('searchFilter').value.toLowerCase();
+    document.querySelectorAll('#resultsTable tbody tr').forEach(row => {{
+      const rowDb = row.children[1]?.textContent.toLowerCase() || '';
+      const rowQ = row.children[2]?.textContent.toLowerCase() || '';
+      const show = (db === '' || rowDb === db) && (q === '' || rowQ.includes(q));
+      row.style.display = show ? '' : 'none';
+    }});
+  }}
+</script>
+</body>
+</html>"""
+    return page_html
+
+
+def start_results_server(html_content: str, port: int = 8787):
+    """Start a local HTTP server serving the results HTML page and open the browser."""
+
+    class ResultsHandler(SimpleHTTPRequestHandler):
+        """Serve the generated HTML for any request path."""
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(html_content.encode('utf-8'))
+
+        def log_message(self, format, *args):
+            # Suppress per-request log noise
+            pass
+
+    # Try ports starting from the given one
+    server = None
+    for attempt_port in range(port, port + 20):
+        try:
+            server = HTTPServer(('127.0.0.1', attempt_port), ResultsHandler)
+            port = attempt_port
+            break
+        except OSError:
+            continue
+
+    if server is None:
+        print(f"Error: Could not find an open port in range {port}-{port + 19}")
+        return
+
+    url = f"http://127.0.0.1:{port}"
+    print(f"\nResults server started at: {url}")
+    print("Press Ctrl+C to stop the server and exit.\n")
+
+    # Open browser after a short delay to let the server start
+    threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+    finally:
+        server.server_close()
+
+
+# ============================================================================
 # Main Processing
 # ============================================================================
 
@@ -1465,6 +1776,19 @@ def main():
         default=None,
         help='Maximum number of databases to process (default: all)'
     )
+    parser.add_argument(
+        '--output-format', '-f',
+        nargs='+',
+        choices=['csv', 'browser'],
+        default=['csv'],
+        help='Output format(s): csv, browser, or both (default: csv)'
+    )
+    parser.add_argument(
+        '--port', '-p',
+        type=int,
+        default=8787,
+        help='Port for browser results server (default: 8787)'
+    )
 
     args = parser.parse_args()
 
@@ -1545,14 +1869,17 @@ def main():
             all_results.extend(results)
             all_summaries.append(summary)
 
-        # Write results
-        if all_results:
-            write_results_csv(all_results, args.output)
+        output_formats = args.output_format
 
+        # Write CSV results
+        if 'csv' in output_formats:
+            if all_results:
+                write_results_csv(all_results, args.output)
+            if all_summaries:
+                write_summary_csv(all_summaries, args.summary)
+
+        # Print overall summary (always)
         if all_summaries:
-            write_summary_csv(all_summaries, args.summary)
-
-            # Print overall summary
             print(f"\n{'='*60}")
             print("OVERALL SUMMARY")
             print(f"{'='*60}")
@@ -1572,6 +1899,26 @@ def main():
 
     finally:
         oracle_mgr.close()
+
+    # Launch browser server (after DB connection is closed)
+    if 'browser' in output_formats and all_results:
+        run_params = {
+            'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
+            'ddl_dir': args.ddl_dir,
+            'metadata_file': args.metadata_file,
+            'index_script': args.index_script,
+            'databases': ', '.join(sorted(ddl_folders)) if not args.databases else ', '.join(args.databases),
+            'test_mode': args.test,
+            'max_questions': args.max_questions or 'all',
+            'max_databases': args.max_databases or 'all',
+            'output_formats': ', '.join(output_formats),
+            'discover_k': 10,
+            'discover_k0': 50,
+            'discover_cols_per_obj': 5,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        html_content = generate_results_html(all_results, all_summaries, run_params)
+        start_results_server(html_content, port=args.port)
 
     return 0
 
