@@ -7,9 +7,9 @@ COMMENT ON COLUMN alignment.alignment IS 'the alignment of the superhero';
 ALTER TABLE alignment MODIFY (alignment ANNOTATIONS (ADD value_description 'commonsense evidence:Alignment refers to a character''s moral and ethical stance and can be used to describe the overall attitude or behavior of a superhero. Some common alignments for superheroes include:Good: These superheroes are typically kind, selfless, and dedicated to protecting others and upholding justice. Examples of good alignments include Superman, Wonder Woman, and Spider-Man.Neutral: These superheroes may not always prioritize the greater good, but they are not necessarily evil either. They may act in their own self-interest or make decisions based on their own moral code. Examples of neutral alignments include the Hulk and Deadpool. Bad: These superheroes are typically selfish, manipulative, and willing to harm others in pursuit of their own goals. Examples of evil alignments include Lex Luthor and the Joker.'));
 
 -- Table: attribute
-COMMENT ON COLUMN attribute.id IS 'the unique identifier of the attribute';
-COMMENT ON COLUMN attribute.attribute_name IS 'the attribute';
-ALTER TABLE attribute MODIFY (attribute_name ANNOTATIONS (ADD value_description 'commonsense evidence:A superhero''s attribute is a characteristic or quality that defines who they are and what they are capable of. This could be a physical trait, such as superhuman strength or the ability to fly, or a personal trait, such as extraordinary intelligence or exceptional bravery.'));
+COMMENT ON COLUMN "attribute".id IS 'the unique identifier of the attribute';
+COMMENT ON COLUMN "attribute".attribute_name IS 'the attribute';
+ALTER TABLE "attribute" MODIFY (attribute_name ANNOTATIONS (ADD value_description 'commonsense evidence:A superhero''s attribute is a characteristic or quality that defines who they are and what they are capable of. This could be a physical trait, such as superhuman strength or the ability to fly, or a personal trait, such as extraordinary intelligence or exceptional bravery.'));
 
 -- Table: colour
 COMMENT ON COLUMN colour.id IS 'the unique identifier of the color';

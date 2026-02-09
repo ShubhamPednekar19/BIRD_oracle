@@ -5,7 +5,7 @@
 COMMENT ON COLUMN circuits.circuitId IS 'unique identification number of the circuit';
 COMMENT ON COLUMN circuits.circuitRef IS 'circuit reference name';
 COMMENT ON COLUMN circuits."name" IS 'full name of circuit';
-COMMENT ON COLUMN circuits.location IS 'location of circuit';
+COMMENT ON COLUMN circuits."location" IS 'location of circuit';
 COMMENT ON COLUMN circuits.country IS 'country of circuit';
 COMMENT ON COLUMN circuits.lat IS 'latitude of location of circuit';
 COMMENT ON COLUMN circuits.lng IS 'longitude of location of circuit';

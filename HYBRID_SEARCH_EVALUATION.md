@@ -82,6 +82,48 @@ python run_hybrid_search_evaluation.py \
   --databases california_schools financial
 ```
 
+### HTML Report Output
+
+Generate an HTML report alongside CSV files:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --html report.html
+```
+
+### HTML Report with Local Server
+
+Generate the HTML report and immediately start a local HTTP server to view it in a browser:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --html report.html \
+  --serve
+```
+
+This will save the HTML file and then start a server at `http://localhost:8000/`. Use `--port` to change the port:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --html report.html \
+  --serve --port 9090
+```
+
+Press `Ctrl+C` to stop the server.
+
+### Viewing a Previously Saved HTML Report
+
+If you already have a saved HTML report and want to serve it later without re-running the evaluation, you can start a local server manually:
+
+```bash
+python -m http.server 8000
+```
+
+Then open `http://localhost:8000/report.html` in your browser.
+
 ## Command Line Arguments
 
 | Argument | Short | Default | Description |
@@ -96,6 +138,9 @@ python run_hybrid_search_evaluation.py \
 | `--test` | `-t` | false | Run in test mode |
 | `--max-questions` | `-q` | all | Max questions per database |
 | `--max-databases` | `-n` | all | Max databases to process |
+| `--html` | | none | Output HTML report file path (e.g. `report.html`) |
+| `--serve` | | false | Start a local HTTP server to view the HTML report |
+| `--port` | | 8000 | Port for the local HTTP server |
 
 ## Output Files
 
@@ -174,6 +219,10 @@ Per-database aggregated metrics:
 | `avg_joint_column_precision` | Average joint column precision |
 | `avg_joint_column_recall` | Average joint column recall |
 | `avg_joint_column_f1` | Average joint column F1 |
+
+### HTML Report (optional)
+
+When `--html <file>` is provided, a single HTML file is generated that contains both the database summary table and the per-query results table. The file can be opened directly in any browser or served via a local HTTP server using `--serve`.
 
 ## Evaluation Metrics
 

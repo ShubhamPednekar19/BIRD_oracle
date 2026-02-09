@@ -3,13 +3,13 @@
 
 -- Table: customers
 COMMENT ON COLUMN customers.CustomerID IS 'identification of the customer';
-COMMENT ON COLUMN customers.Segment IS 'client segment';
+COMMENT ON COLUMN customers."Segment" IS 'client segment';
 COMMENT ON COLUMN customers.Currency IS 'Currency';
 
 -- Table: gasstations
 COMMENT ON COLUMN gasstations.GasStationID IS 'Gas Station ID';
 COMMENT ON COLUMN gasstations.ChainID IS 'Chain ID';
-COMMENT ON COLUMN gasstations.Segment IS 'chain segment';
+COMMENT ON COLUMN gasstations."Segment" IS 'chain segment';
 
 -- Table: products
 COMMENT ON COLUMN products.ProductID IS 'Product ID';
