@@ -15,7 +15,7 @@
        - ANNOTATION (native JSON)
        - ANNOTATION_TEXT (generated CLOB projection for Oracle Text indexing)
 
-  2) Creates package DEVELOPER (AUTHID CURRENT_USER) with 3 procedures:
+  2) Creates package developer (AUTHID CURRENT_USER) with 3 procedures:
        - REFRESH_DATA        : refresh metadata tables from DBMS_DEVELOPER.GET_METADATA
        - SETUP_HYBRID_SEARCH : load ONNX model, create vectorizer, datastores, section groups, hybrid indexes
        - DISCOVER_OBJECTS    : two-phase hybrid search + rerank + return OUT JSON
@@ -26,11 +26,6 @@
   - Multi-column datastore cannot include native JSON columns directly (DRG-12605),
     so we index ANNOTATION_TEXT instead of ANNOTATION.
   - Hybrid index base column must be text -> we use DUMMY CHAR(1).
-
-
-/* ----- optional: make re-runs easier ----- */
--- SET SERVEROUTPUT ON           -- SQL*Plus only; not valid in oracledb
--- WHENEVER SQLERROR EXIT SQL.SQLCODE  -- SQL*Plus only; not valid in oracledb
 
 /* ============================================================================ */
 /*  0) DROP objects (ignore if missing)                                           */
@@ -45,47 +40,55 @@ BEGIN EXECUTE IMMEDIATE 'DROP TABLE all_cols_search_text PURGE'; EXCEPTION WHEN 
 /
 BEGIN EXECUTE IMMEDIATE 'DROP TABLE all_objects_search_text PURGE'; EXCEPTION WHEN OTHERS THEN NULL; END;
 /
-
-/* ============================================================================ */
-/*  1) TABLES                                                                     */
-/* ============================================================================ */
-
-CREATE TABLE all_objects_search_text (
-  object_id      NUMBER PRIMARY KEY,
-  object_name    VARCHAR2(128) NOT NULL,
-  owner          VARCHAR2(128) NOT NULL,
-  object_type    VARCHAR2(23)  NOT NULL,
-  comment_text   CLOB,
-  annotation     CLOB,
-  -- Oracle Text / hybrid index cannot index JSON type directly in multi-column datastore.
-  -- So we add a generated text projection:
-  column_summary CLOB,
-  dummy          CHAR(1) DEFAULT 'X' NOT NULL
-);
+BEGIN EXECUTE IMMEDIATE 'DROP PUBLIC SYNONYM developer'; EXCEPTION WHEN OTHERS THEN NULL; END;
 /
 
-CREATE TABLE all_cols_search_text (
-  object_id      NUMBER NOT NULL,
-  owner          VARCHAR2(128) NOT NULL,
-  table_name     VARCHAR2(128) NOT NULL,
-  column_name    VARCHAR2(128) NOT NULL,
-  data_type      VARCHAR2(128),
-  comment_text   CLOB,
-  annotation     CLOB,
-  dummy          CHAR(1) DEFAULT 'X' NOT NULL,
-  CONSTRAINT all_cols_search_pk PRIMARY KEY (owner, table_name, column_name),
-  CONSTRAINT all_cols_search_fk FOREIGN KEY (object_id)
-    REFERENCES all_objects_search_text(object_id)
-);
+BEGIN
+  EXECUTE IMMEDIATE '
+    CREATE TABLE all_objects_search_text (
+      object_id NUMBER PRIMARY KEY,
+      object_name VARCHAR2(128) NOT NULL,
+      owner VARCHAR2(128) NOT NULL,
+      object_type VARCHAR2(23) NOT NULL,
+      comment_text CLOB,
+      annotation CLOB,
+      column_summary CLOB,
+      dummy CHAR(1) DEFAULT ''X'' NOT NULL
+    )';
+EXCEPTION
+  WHEN OTHERS THEN
+    IF SQLCODE != -955 THEN RAISE; END IF;
+END;
+/
+
+BEGIN
+  EXECUTE IMMEDIATE '
+    CREATE TABLE all_cols_search_text (
+      object_id NUMBER NOT NULL,
+      owner VARCHAR2(128) NOT NULL,
+      table_name VARCHAR2(128) NOT NULL,
+      column_name VARCHAR2(128) NOT NULL,
+      data_type VARCHAR2(128),
+      comment_text CLOB,
+      annotation CLOB,
+      dummy CHAR(1) DEFAULT ''X'' NOT NULL,
+      CONSTRAINT all_cols_search_pk PRIMARY KEY (owner, table_name, column_name),
+      CONSTRAINT all_cols_search_fk FOREIGN KEY (object_id)
+        REFERENCES all_objects_search_text(object_id)
+    )';
+EXCEPTION
+  WHEN OTHERS THEN
+    IF SQLCODE != -955 THEN RAISE; END IF;
+END;
 /
 
 /* ============================================================================ */
-/*  2) PACKAGE: DEVELOPER                                                         */
+/*  2) PACKAGE: developer                                                         */
 /* ============================================================================ */
 
 CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
 -------------------------------------------------------------------------------
--- PACKAGE: DEVELOPER
+-- PACKAGE: developer
 --
 -- PURPOSE:
 --   Metadata discovery utilities for Hybrid Vector Search.
@@ -172,10 +175,8 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
   );
 END developer;
 /
--- SHOW ERRORS  -- SQL*Plus only; not valid in oracledb
 
 CREATE OR REPLACE PACKAGE BODY developer AS
-
   /* ------------------------------------------------------------------------ */
   /* Utility: best-effort drop helper (ignore not-exists)                      */
   /* ------------------------------------------------------------------------ */
@@ -196,7 +197,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
   /* ======================================================================== */
   PROCEDURE refresh_data(p_table_name IN VARCHAR2 DEFAULT NULL) IS
     l_meta           JSON;
-    l_owner          VARCHAR2(128) := USER;
+    l_owner          VARCHAR2(128) := SYS_CONTEXT('USERENV','CURRENT_SCHEMA');
     l_target_name    VARCHAR2(128) := CASE
                                        WHEN p_table_name IS NULL THEN NULL
                                        ELSE UPPER(TRIM(p_table_name))
@@ -319,6 +320,9 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     l_params_obj  VARCHAR2(4000);
     l_params_col  VARCHAR2(4000);
   BEGIN
+    /* Refresh metadata data */
+    refresh_data();
+
     /* 1) Load ONNX model (drop if exists) */
     BEGIN
       DBMS_VECTOR.DROP_ONNX_MODEL(model_name => p_model_name);
@@ -729,7 +733,11 @@ CREATE OR REPLACE PACKAGE BODY developer AS
 
 END developer;
 /
--- SHOW ERRORS  -- SQL*Plus only; not valid in oracledb
+
+-- Grant access to package to public
+GRANT EXECUTE ON developer TO PUBLIC;
+
+CREATE PUBLIC SYNONYM developer FOR SYS.developer;
 
 /* ============================================================================ */
 /*  3) OPTIONAL: Example execution (uncomment to run)                            */
