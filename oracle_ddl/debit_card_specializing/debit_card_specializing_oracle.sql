@@ -1,6 +1,3 @@
--- Oracle DDL for debit_card_specializing.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE customers
 (
     CustomerID NUMBER NOT NULL,

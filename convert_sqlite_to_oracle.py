@@ -436,6 +436,8 @@ def convert_table_to_oracle(parsed_table: Dict) -> Tuple[str, List[Tuple[str, st
                 parts.append("DEFAULT SYSTIMESTAMP")
             elif default_val.upper() == 'CURRENT_DATE':
                 parts.append("DEFAULT SYSDATE")
+            elif default_val.strip("'") == '0000-00-00':
+                parts.append("DEFAULT DATE '0001-01-01'")
             else:
                 parts.append(f"DEFAULT {default_val}")
 
@@ -510,9 +512,6 @@ def convert_database(db_path: str, output_path: str) -> bool:
 
         oracle_ddls = []
         deferred_foreign_keys: List[Tuple[str, str, str]] = []
-        oracle_ddls.append(f"-- Oracle DDL for {os.path.basename(db_path)}")
-        oracle_ddls.append(f"-- Converted from SQLite schema")
-        oracle_ddls.append("")
 
         for schema in schemas:
             parsed = parse_create_table(schema)
@@ -523,7 +522,6 @@ def convert_database(db_path: str, output_path: str) -> bool:
                 deferred_foreign_keys.extend(table_fks)
 
         if deferred_foreign_keys:
-            oracle_ddls.append("-- Deferred foreign key constraints")
             fk_counts: Dict[str, int] = {}
 
             for table_name, raw_table_name, fk_clause in deferred_foreign_keys:

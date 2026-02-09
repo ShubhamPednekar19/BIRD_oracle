@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-# Oracle reserved words that need to be quoted when used as identifiers
+# Oracle reserved words that need to be quoted when used as identifiers.
+# Must stay in sync with convert_sqlite_to_oracle.py.
 ORACLE_RESERVED_WORDS = {
     'ACCESS', 'ADD', 'ALL', 'ALTER', 'AND', 'ANY', 'AS', 'ASC', 'AUDIT',
     'BETWEEN', 'BY', 'CHAR', 'CHECK', 'CLUSTER', 'COLUMN', 'COMMENT',
@@ -253,9 +254,6 @@ def process_database(db_path: str, output_dir: str) -> Tuple[bool, int]:
         return False, 0
 
     all_statements = []
-    all_statements.append(f"-- Oracle Metadata for {db_name}")
-    all_statements.append(f"-- Generated from BIRD benchmark database_description CSVs")
-    all_statements.append("")
 
     # Find all CSV files
     csv_files = sorted([f for f in os.listdir(desc_dir) if f.endswith('.csv')])
@@ -276,9 +274,7 @@ def process_database(db_path: str, output_dir: str) -> Tuple[bool, int]:
             statements = generate_metadata_sql(db_name, table_name, columns)
 
             if statements:
-                all_statements.append(f"-- Table: {table_name}")
                 all_statements.extend(statements)
-                all_statements.append("")
                 total_statements += len(statements)
 
     if total_statements > 0:

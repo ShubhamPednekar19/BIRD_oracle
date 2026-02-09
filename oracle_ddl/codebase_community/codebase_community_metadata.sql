@@ -1,13 +1,8 @@
--- Oracle Metadata for codebase_community
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: badges
 COMMENT ON COLUMN badges.Id IS 'the badge id';
 COMMENT ON COLUMN badges.UserId IS 'the unique id of the user';
 COMMENT ON COLUMN badges."Name" IS 'the badge name the user obtained';
 COMMENT ON COLUMN badges."Date" IS 'the date that the user obtained the badge';
 
--- Table: comments
 COMMENT ON COLUMN comments.Id IS 'the comment Id';
 COMMENT ON COLUMN comments.PostId IS 'the unique id of the post';
 COMMENT ON COLUMN comments.Score IS 'rating score';
@@ -17,7 +12,6 @@ COMMENT ON COLUMN comments.CreationDate IS 'the creation date of the comment';
 COMMENT ON COLUMN comments.UserId IS 'the id of the user who post the comment';
 COMMENT ON COLUMN comments.UserDisplayName IS 'user''s display name';
 
--- Table: postHistory
 COMMENT ON COLUMN postHistory.Id IS 'the post history id';
 COMMENT ON COLUMN postHistory.PostHistoryTypeId IS 'the id of the post history type';
 COMMENT ON COLUMN postHistory.PostId IS 'the unique id of the post';
@@ -28,14 +22,12 @@ COMMENT ON COLUMN postHistory."Text" IS 'the detailed content of the post';
 COMMENT ON COLUMN postHistory."Comment" IS 'comments of the post';
 COMMENT ON COLUMN postHistory.UserDisplayName IS 'user''s display name';
 
--- Table: postLinks
 COMMENT ON COLUMN postLinks.Id IS 'the post link id';
 COMMENT ON COLUMN postLinks.CreationDate IS 'the creation date of the post link';
 COMMENT ON COLUMN postLinks.PostId IS 'the post id';
 COMMENT ON COLUMN postLinks.RelatedPostId IS 'the id of the related post';
 COMMENT ON COLUMN postLinks.LinkTypeId IS 'the id of the link type';
 
--- Table: posts
 COMMENT ON COLUMN posts.Id IS 'the post id';
 COMMENT ON COLUMN posts.PostTypeId IS 'the id of the post type';
 COMMENT ON COLUMN posts.AcceptedAnswerId IS 'the accepted answer id of the post';
@@ -62,7 +54,6 @@ ALTER TABLE posts MODIFY (ClosedDate ANNOTATIONS (ADD value_description 'commons
 COMMENT ON COLUMN posts.OwnerDisplayName IS 'the display name of the post owner';
 COMMENT ON COLUMN posts.LastEditorDisplayName IS 'the display name of the last editor';
 
--- Table: tags
 COMMENT ON COLUMN tags.Id IS 'the tag id';
 COMMENT ON COLUMN tags.TagName IS 'the name of the tag';
 COMMENT ON COLUMN tags."Count" IS 'the count of posts that contain this tag';
@@ -70,7 +61,6 @@ ALTER TABLE tags MODIFY ("Count" ANNOTATIONS (ADD value_description 'more counts
 COMMENT ON COLUMN tags.ExcerptPostId IS 'the excerpt post id of the tag';
 COMMENT ON COLUMN tags.WikiPostId IS 'the wiki post id of the tag';
 
--- Table: users
 COMMENT ON COLUMN users.Id IS 'the user id';
 COMMENT ON COLUMN users.Reputation IS 'the user''s reputation';
 ALTER TABLE users MODIFY (Reputation ANNOTATIONS (ADD value_description 'commonsense evidence:The user with higher reputation has more influence.'));
@@ -88,7 +78,6 @@ COMMENT ON COLUMN users.Age IS 'user''s age';
 ALTER TABLE users MODIFY (Age ANNOTATIONS (ADD value_description ' teenager: 13-18 adult: 19-65 elder: > 65'));
 COMMENT ON COLUMN users.ProfileImageUrl IS 'the profile image url';
 
--- Table: votes
 COMMENT ON COLUMN votes.Id IS 'the vote id';
 COMMENT ON COLUMN votes.PostId IS 'the id of the post that is voted';
 COMMENT ON COLUMN votes.VoteTypeId IS 'the id of the vote type';

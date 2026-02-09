@@ -1,6 +1,3 @@
--- Oracle DDL for financial.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE "account"
 (
     account_id NUMBER DEFAULT 0 NOT NULL,
@@ -96,7 +93,6 @@ CREATE TABLE trans
     PRIMARY KEY (trans_id)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE "account" ADD CONSTRAINT FK_ACCOUNT_1 FOREIGN KEY (district_id) REFERENCES district (district_id);
 ALTER TABLE card ADD CONSTRAINT FK_CARD_1 FOREIGN KEY (disp_id) REFERENCES disp (disp_id);
 ALTER TABLE client ADD CONSTRAINT FK_CLIENT_1 FOREIGN KEY (district_id) REFERENCES district (district_id);

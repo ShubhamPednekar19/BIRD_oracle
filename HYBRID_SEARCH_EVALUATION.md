@@ -11,7 +11,7 @@ The evaluation pipeline:
 3. **Sets up hybrid vector search** using the `developer` package
 4. **Runs natural language queries** from `dev_with_metadata.json`
 5. **Compares discovered objects** with expected tables/columns
-6. **Generates metrics** and exports to CSV
+6. **Generates metrics** and exports to CSV and/or browser dashboard
 7. **Cleans up** by dropping users after processing
 
 ## Prerequisites
