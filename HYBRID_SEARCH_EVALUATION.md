@@ -11,7 +11,7 @@ The evaluation pipeline:
 3. **Sets up hybrid vector search** using the `developer` package
 4. **Runs natural language queries** from `dev_with_metadata.json`
 5. **Compares discovered objects** with expected tables/columns
-6. **Generates metrics** and exports to CSV
+6. **Generates metrics** and exports to CSV and/or browser dashboard
 7. **Cleans up** by dropping users after processing
 
 ## Prerequisites
@@ -82,6 +82,34 @@ python run_hybrid_search_evaluation.py \
   --databases california_schools financial
 ```
 
+### Output Format Options
+
+By default, results are written as CSV files. You can use `--output-format` (`-f`) to choose one or more output formats.
+
+**Browser only** — launches an interactive dashboard in your default browser:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  -f browser
+```
+
+**Both CSV and browser:**
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  -f csv browser
+```
+
+**Browser on a custom port:**
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  -f browser --port 9000
+```
+
 ## Command Line Arguments
 
 | Argument | Short | Default | Description |
@@ -96,6 +124,8 @@ python run_hybrid_search_evaluation.py \
 | `--test` | `-t` | false | Run in test mode |
 | `--max-questions` | `-q` | all | Max questions per database |
 | `--max-databases` | `-n` | all | Max databases to process |
+| `--output-format` | `-f` | `csv` | Output format(s): `csv`, `browser`, or both |
+| `--port` | `-p` | `8787` | Port for browser results server |
 
 ## Output Files
 
@@ -174,6 +204,22 @@ Per-database aggregated metrics:
 | `avg_joint_column_precision` | Average joint column precision |
 | `avg_joint_column_recall` | Average joint column recall |
 | `avg_joint_column_f1` | Average joint column F1 |
+
+### Browser Visualization (`--output-format browser`)
+
+When `browser` is included in `--output-format`, a local HTTP server starts after evaluation completes and opens an interactive dashboard in your default browser at `http://127.0.0.1:8787`.
+
+The dashboard contains three tabs:
+
+| Tab | Contents |
+|-----|----------|
+| **Run Parameters** | All configuration used for the run — connection string (masked), DDL directory, metadata file, test mode, limits, discover parameters (`k=10`, `k0=50`, `cols_per_obj=5`), and timestamp |
+| **Database Summary** | Per-database aggregated metrics table: precision, recall, F1, Hit@K rates, MRR, Jaccard, exact match rate, and joint column F1 |
+| **Detailed Results** | Per-query results with database dropdown filter, text search on questions, color-coded F1 scores (green/orange/red), and error rows highlighted |
+
+Overall KPI cards at the top show: database count, total/successful/failed questions, overall table F1, and overall Hit@1 rate.
+
+Press `Ctrl+C` in the terminal to stop the server. The Oracle database connection is closed before the server starts, so the server does not hold any database resources.
 
 ## Evaluation Metrics
 

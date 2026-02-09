@@ -1,6 +1,3 @@
--- Oracle DDL for codebase_community.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE badges
 (
     Id NUMBER NOT NULL,
@@ -112,7 +109,6 @@ CREATE TABLE votes
     PRIMARY KEY (Id)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE badges ADD CONSTRAINT FK_BADGES_1 FOREIGN KEY (UserId) REFERENCES users (Id) ON DELETE CASCADE;
 ALTER TABLE comments ADD CONSTRAINT FK_COMMENTS_1 FOREIGN KEY (PostId) REFERENCES posts (Id) ON DELETE CASCADE;
 ALTER TABLE comments ADD CONSTRAINT FK_COMMENTS_2 FOREIGN KEY (UserId) REFERENCES users (Id) ON DELETE CASCADE;

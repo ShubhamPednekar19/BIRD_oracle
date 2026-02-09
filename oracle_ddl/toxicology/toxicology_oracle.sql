@@ -1,6 +1,3 @@
--- Oracle DDL for toxicology.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE atom
 (
     atom_id VARCHAR2(4000) NOT NULL,
@@ -32,7 +29,6 @@ CREATE TABLE molecule
     PRIMARY KEY (molecule_id)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE atom ADD CONSTRAINT FK_ATOM_1 FOREIGN KEY (molecule_id) REFERENCES molecule (molecule_id);
 ALTER TABLE bond ADD CONSTRAINT FK_BOND_1 FOREIGN KEY (molecule_id) REFERENCES molecule (molecule_id);
 ALTER TABLE connected ADD CONSTRAINT FK_CONNECTED_1 FOREIGN KEY (atom_id) REFERENCES atom (atom_id) ON DELETE CASCADE;

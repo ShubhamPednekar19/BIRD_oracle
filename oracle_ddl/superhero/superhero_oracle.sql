@@ -1,6 +1,3 @@
--- Oracle DDL for superhero.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE alignment
 (
     id NUMBER NOT NULL,
@@ -80,7 +77,6 @@ CREATE TABLE superpower
     PRIMARY KEY (id)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE hero_attribute ADD CONSTRAINT FK_HERO_ATTRIBUTE_1 FOREIGN KEY (attribute_id) REFERENCES "attribute" (id);
 ALTER TABLE hero_attribute ADD CONSTRAINT FK_HERO_ATTRIBUTE_2 FOREIGN KEY (hero_id) REFERENCES superhero (id);
 ALTER TABLE hero_power ADD CONSTRAINT FK_HERO_POWER_1 FOREIGN KEY (hero_id) REFERENCES superhero (id);

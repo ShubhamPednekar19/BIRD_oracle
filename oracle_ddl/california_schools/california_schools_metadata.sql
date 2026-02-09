@@ -1,7 +1,3 @@
--- Oracle Metadata for california_schools
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: frpm
 COMMENT ON COLUMN frpm.CDSCode IS 'CDSCode';
 COMMENT ON COLUMN frpm."Academic Year" IS 'Academic Year';
 COMMENT ON COLUMN frpm."County Code" IS 'County Code';
@@ -32,7 +28,6 @@ COMMENT ON COLUMN frpm."Free Meal Count (Ages 5-17)" IS 'Free Meal Count (Ages 5
 ALTER TABLE frpm MODIFY ("Free Meal Count (Ages 5-17)" ANNOTATIONS (ADD value_description 'commonsense evidence:eligible free rate = Free Meal Count / Enrollment'));
 COMMENT ON COLUMN frpm."2013-14 CALPADS Fall 1 Certification Status" IS '2013-14 CALPADS Fall 1 Certification Status';
 
--- Table: satscores
 COMMENT ON COLUMN satscores.cds IS 'California Department Schools';
 COMMENT ON COLUMN satscores.rtype IS 'rtype';
 ALTER TABLE satscores MODIFY (rtype ANNOTATIONS (ADD value_description 'unuseful'));
@@ -51,7 +46,6 @@ ALTER TABLE satscores MODIFY (AvgScrWrite ANNOTATIONS (ADD value_description 'av
 COMMENT ON COLUMN satscores.NumGE1500 IS 'Number of Test Takers Whose Total SAT Scores Are Greater or Equal to 1500';
 ALTER TABLE satscores MODIFY (NumGE1500 ANNOTATIONS (ADD value_description 'Number of Test Takers Whose Total SAT Scores Are Greater or Equal to 1500commonsense evidence:Excellence Rate = NumGE1500 / NumTstTakr'));
 
--- Table: schools
 COMMENT ON COLUMN schools.CDSCode IS 'CDSCode';
 COMMENT ON COLUMN schools.NCESDist IS 'This field represents the 7-digit National Center for Educational Statistics (NCES) school district identification number. The first 2 digits identify the state and the last 5 digits identify the school district. Combined, they make a unique 7-digit ID for each school district.';
 COMMENT ON COLUMN schools.NCESSchool IS 'This field represents the 5-digit NCES school identification number. The NCESSchool combined with the NCESDist form a unique 12-digit ID for each school.';

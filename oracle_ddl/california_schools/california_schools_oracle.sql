@@ -1,6 +1,3 @@
--- Oracle DDL for california_schools.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE frpm
 (
     CDSCode VARCHAR2(4000) NOT NULL,
@@ -105,6 +102,5 @@ CREATE TABLE schools
     PRIMARY KEY (CDSCode)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE frpm ADD CONSTRAINT FK_FRPM_1 FOREIGN KEY (CDSCode) REFERENCES schools (CDSCode);
 ALTER TABLE satscores ADD CONSTRAINT FK_SATSCORES_1 FOREIGN KEY (cds) REFERENCES schools (CDSCode);

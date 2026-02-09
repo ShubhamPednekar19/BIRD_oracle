@@ -1,16 +1,10 @@
--- Oracle Metadata for european_football_2
--- Generated from BIRD benchmark database_description CSVs
-
--- Table: Country
 COMMENT ON COLUMN Country.id IS 'the unique id for countries';
 COMMENT ON COLUMN Country."name" IS 'country name';
 
--- Table: League
 COMMENT ON COLUMN League.id IS 'the unique id for leagues';
 COMMENT ON COLUMN League.country_id IS 'the unique id for countries';
 COMMENT ON COLUMN League."name" IS 'league name';
 
--- Table: Match
 COMMENT ON COLUMN Match.id IS 'the unique id for matches';
 COMMENT ON COLUMN Match.country_id IS 'country id';
 COMMENT ON COLUMN Match.league_id IS 'league id';
@@ -33,7 +27,6 @@ COMMENT ON COLUMN Match."cross" IS 'Balls sent into the opposition team''s area 
 COMMENT ON COLUMN Match.corner IS 'Ball goes out of play for a corner kick in the match';
 COMMENT ON COLUMN Match.possession IS 'The duration from a player taking over the ball in the match';
 
--- Table: Player
 COMMENT ON COLUMN Player.id IS 'the unique id for players';
 COMMENT ON COLUMN Player.player_api_id IS 'the id of the player api';
 COMMENT ON COLUMN Player.player_name IS 'player name';
@@ -43,7 +36,6 @@ ALTER TABLE Player MODIFY (birthday ANNOTATIONS (ADD value_description 'e.g. 199
 COMMENT ON COLUMN Player.height IS 'the player''s height';
 COMMENT ON COLUMN Player.weight IS 'the player''s weight';
 
--- Table: Player_Attributes
 COMMENT ON COLUMN Player_Attributes.id IS 'the unique id for players';
 COMMENT ON COLUMN Player_Attributes.player_fifa_api_id IS 'the id of the player fifa api';
 COMMENT ON COLUMN Player_Attributes.player_api_id IS 'the id of the player api';
@@ -126,14 +118,12 @@ ALTER TABLE Player_Attributes MODIFY (gk_positioning ANNOTATIONS (ADD value_desc
 COMMENT ON COLUMN Player_Attributes.gk_reflexes IS 'the player''s goalkeep reflexes score';
 ALTER TABLE Player_Attributes MODIFY (gk_reflexes ANNOTATIONS (ADD value_description '0-100 which is calculated by FIFA'));
 
--- Table: Team
 COMMENT ON COLUMN Team.id IS 'the unique id for teams';
 COMMENT ON COLUMN Team.team_api_id IS 'the id of the team api';
 COMMENT ON COLUMN Team.team_fifa_api_id IS 'the id of the team fifa api';
 COMMENT ON COLUMN Team.team_long_name IS 'the team''s long name';
 COMMENT ON COLUMN Team.team_short_name IS 'the team''s short name';
 
--- Table: Team_Attributes
 COMMENT ON COLUMN Team_Attributes.id IS 'the unique id for teams';
 COMMENT ON COLUMN Team_Attributes.team_fifa_api_id IS 'the id of the team fifa api';
 COMMENT ON COLUMN Team_Attributes.team_api_id IS 'the id of the team api';

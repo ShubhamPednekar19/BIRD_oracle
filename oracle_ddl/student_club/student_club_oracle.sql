@@ -1,6 +1,3 @@
--- Oracle DDL for student_club.sqlite
--- Converted from SQLite schema
-
 CREATE TABLE attendance
 (
     link_to_event VARCHAR2(4000),
@@ -89,7 +86,6 @@ CREATE TABLE zip_code
     PRIMARY KEY (zip_code)
 );
 
--- Deferred foreign key constraints
 ALTER TABLE attendance ADD CONSTRAINT FK_ATTENDANCE_1 FOREIGN KEY (link_to_event) REFERENCES "event" (event_id);
 ALTER TABLE attendance ADD CONSTRAINT FK_ATTENDANCE_2 FOREIGN KEY (link_to_member) REFERENCES "member" (member_id);
 ALTER TABLE budget ADD CONSTRAINT FK_BUDGET_1 FOREIGN KEY (link_to_event) REFERENCES "event" (event_id);
