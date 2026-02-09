@@ -393,11 +393,13 @@ class OracleManager:
                 sql_content = f.read()
 
             statements = self.split_oracle_script(sql_content)
+            print(f"Split SQL file into {len(statements)} statements")
 
             filename = os.path.basename(filepath)
 
             with self.user_connection.cursor() as cursor:
                 for i, stmt in enumerate(statements, start=1):
+                    stmt = self._strip_leading_comments(stmt)
                     stmt = stmt.strip()
                     if not stmt:
                         continue
@@ -464,6 +466,7 @@ class OracleManager:
             blocks = sql_content.split('\n/\n')
 
             plsql_keywords = ['CREATE OR REPLACE PACKAGE',
+                              'CREATE OR REPLACE PACKAGE BODY',
                               'CREATE OR REPLACE PROCEDURE',
                               'CREATE OR REPLACE FUNCTION',
                               'BEGIN', 'DECLARE']
@@ -662,6 +665,21 @@ class OracleManager:
             self.user_connection.close()
         if self.sys_connection:
             self.sys_connection.close()
+
+    def _strip_leading_comments(self, stmt: str) -> str:
+        s = stmt.lstrip()
+
+        while True:
+            # strip leading -- comment lines
+            s2 = re.sub(r'(?m)\A(?:\s*--[^\n]*\n)+', '', s)
+            # strip leading /* ... */ block comment(s)
+            s2 = re.sub(r'(?s)\A\s*/\*.*?\*/\s*', '', s2)
+
+            if s2 == s:
+                break
+            s = s2
+
+        return s.strip()
 
     def split_oracle_script(self, sql: str) -> List[str]:
         statements: List[str] = []
