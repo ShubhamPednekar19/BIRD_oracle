@@ -82,33 +82,47 @@ python run_hybrid_search_evaluation.py \
   --databases california_schools financial
 ```
 
-### Output Format Options
+### HTML Report Output
 
-By default, results are written as CSV files. You can use `--output-format` (`-f`) to choose one or more output formats.
-
-**Browser only** — launches an interactive dashboard in your default browser:
+Generate an HTML report alongside CSV files:
 
 ```bash
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
-  -f browser
+  --html report.html
 ```
 
-**Both CSV and browser:**
+### HTML Report with Local Server
+
+Generate the HTML report and immediately start a local HTTP server to view it in a browser:
 
 ```bash
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
-  -f csv browser
+  --html report.html \
+  --serve
 ```
 
-**Browser on a custom port:**
+This will save the HTML file and then start a server at `http://localhost:8000/`. Use `--port` to change the port:
 
 ```bash
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
-  -f browser --port 9000
+  --html report.html \
+  --serve --port 9090
 ```
+
+Press `Ctrl+C` to stop the server.
+
+### Viewing a Previously Saved HTML Report
+
+If you already have a saved HTML report and want to serve it later without re-running the evaluation, you can start a local server manually:
+
+```bash
+python -m http.server 8000
+```
+
+Then open `http://localhost:8000/report.html` in your browser.
 
 ## Command Line Arguments
 
@@ -124,8 +138,9 @@ python run_hybrid_search_evaluation.py \
 | `--test` | `-t` | false | Run in test mode |
 | `--max-questions` | `-q` | all | Max questions per database |
 | `--max-databases` | `-n` | all | Max databases to process |
-| `--output-format` | `-f` | `csv` | Output format(s): `csv`, `browser`, or both |
-| `--port` | `-p` | `8787` | Port for browser results server |
+| `--html` | | none | Output HTML report file path (e.g. `report.html`) |
+| `--serve` | | false | Start a local HTTP server to view the HTML report |
+| `--port` | | 8000 | Port for the local HTTP server |
 
 ## Output Files
 
@@ -205,21 +220,9 @@ Per-database aggregated metrics:
 | `avg_joint_column_recall` | Average joint column recall |
 | `avg_joint_column_f1` | Average joint column F1 |
 
-### Browser Visualization (`--output-format browser`)
+### HTML Report (optional)
 
-When `browser` is included in `--output-format`, a local HTTP server starts after evaluation completes and opens an interactive dashboard in your default browser at `http://127.0.0.1:8787`.
-
-The dashboard contains three tabs:
-
-| Tab | Contents |
-|-----|----------|
-| **Run Parameters** | All configuration used for the run — connection string (masked), DDL directory, metadata file, test mode, limits, discover parameters (`k=10`, `k0=50`, `cols_per_obj=5`), and timestamp |
-| **Database Summary** | Per-database aggregated metrics table: precision, recall, F1, Hit@K rates, MRR, Jaccard, exact match rate, and joint column F1 |
-| **Detailed Results** | Per-query results with database dropdown filter, text search on questions, color-coded F1 scores (green/orange/red), and error rows highlighted |
-
-Overall KPI cards at the top show: database count, total/successful/failed questions, overall table F1, and overall Hit@1 rate.
-
-Press `Ctrl+C` in the terminal to stop the server. The Oracle database connection is closed before the server starts, so the server does not hold any database resources.
+When `--html <file>` is provided, a single HTML file is generated that contains both the database summary table and the per-query results table. The file can be opened directly in any browser or served via a local HTTP server using `--serve`.
 
 ## Evaluation Metrics
 

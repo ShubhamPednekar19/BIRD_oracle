@@ -16,15 +16,16 @@ ALTER TABLE budget MODIFY (event_status ANNOTATIONS (ADD value_description 'Clos
 COMMENT ON COLUMN budget.link_to_event IS 'The unique identifier of the event to which the budget line applies.';
 ALTER TABLE budget MODIFY (link_to_event ANNOTATIONS (ADD value_description 'References the Event table'));
 
-COMMENT ON COLUMN event.event_id IS 'A unique identifier for the event';
-COMMENT ON COLUMN event.event_name IS 'event name';
-COMMENT ON COLUMN event.event_date IS 'The date the event took place or is scheduled to take place';
-ALTER TABLE event MODIFY (event_date ANNOTATIONS (ADD value_description 'e.g. 2020-03-10T12:00:00'));
-COMMENT ON COLUMN event."type" IS 'The kind of event, such as game, social, election';
-COMMENT ON COLUMN event.notes IS 'A free text field for any notes about the event';
-COMMENT ON COLUMN event."location" IS 'Address where the event was held or is to be held or the name of such a location';
-COMMENT ON COLUMN event."status" IS 'One of three values indicating if the event is in planning, is opened, or is closed';
-ALTER TABLE event MODIFY ("status" ANNOTATIONS (ADD value_description 'Open/ Closed/ Planning'));
+-- Table: event
+COMMENT ON COLUMN "event".event_id IS 'A unique identifier for the event';
+COMMENT ON COLUMN "event".event_name IS 'event name';
+COMMENT ON COLUMN "event".event_date IS 'The date the event took place or is scheduled to take place';
+ALTER TABLE "event" MODIFY (event_date ANNOTATIONS (ADD value_description 'e.g. 2020-03-10T12:00:00'));
+COMMENT ON COLUMN "event"."type" IS 'The kind of event, such as game, social, election';
+COMMENT ON COLUMN "event".notes IS 'A free text field for any notes about the event';
+COMMENT ON COLUMN "event"."location" IS 'Address where the event was held or is to be held or the name of such a location';
+COMMENT ON COLUMN "event"."status" IS 'One of three values indicating if the event is in planning, is opened, or is closed';
+ALTER TABLE "event" MODIFY ("status" ANNOTATIONS (ADD value_description 'Open/ Closed/ Planning'));
 
 COMMENT ON COLUMN expense.expense_id IS 'unique id of income';
 COMMENT ON COLUMN expense.expense_description IS 'A textual description of what the money was spend for';
@@ -51,17 +52,18 @@ COMMENT ON COLUMN major.major_name IS 'major name';
 COMMENT ON COLUMN major.department IS 'The name of the department that offers the major';
 COMMENT ON COLUMN major.college IS 'The name college that houses the department that offers the major';
 
-COMMENT ON COLUMN member.member_id IS 'unique id of member';
-COMMENT ON COLUMN member.first_name IS 'member''s first name';
-COMMENT ON COLUMN member.last_name IS 'member''s last name';
-ALTER TABLE member MODIFY (last_name ANNOTATIONS (ADD value_description 'commonsense evidence: full name is first_name + last_name. e.g. A member''s first name is Angela and last name is Sanders. Thus, his/her full name is Angela Sanders.'));
-COMMENT ON COLUMN member.email IS 'member''s email';
-COMMENT ON COLUMN member."position" IS 'The position the member holds in the club';
-COMMENT ON COLUMN member.t_shirt_size IS 'The size of tee shirt that member wants when shirts are ordered';
-ALTER TABLE member MODIFY (t_shirt_size ANNOTATIONS (ADD value_description 'commonsense evidence: usually the student ordered t-shirt with lager size has bigger body shape'));
-COMMENT ON COLUMN member.phone IS 'The best telephone at which to contact the member';
-COMMENT ON COLUMN member.zip IS 'the zip code of the member''s hometown';
-COMMENT ON COLUMN member.link_to_major IS 'The unique identifier of the major of the member. References the Major table';
+-- Table: member
+COMMENT ON COLUMN "member".member_id IS 'unique id of member';
+COMMENT ON COLUMN "member".first_name IS 'member''s first name';
+COMMENT ON COLUMN "member".last_name IS 'member''s last name';
+ALTER TABLE "member" MODIFY (last_name ANNOTATIONS (ADD value_description 'commonsense evidence: full name is first_name + last_name. e.g. A member''s first name is Angela and last name is Sanders. Thus, his/her full name is Angela Sanders.'));
+COMMENT ON COLUMN "member".email IS 'member''s email';
+COMMENT ON COLUMN "member"."position" IS 'The position the member holds in the club';
+COMMENT ON COLUMN "member".t_shirt_size IS 'The size of tee shirt that member wants when shirts are ordered';
+ALTER TABLE "member" MODIFY (t_shirt_size ANNOTATIONS (ADD value_description 'commonsense evidence: usually the student ordered t-shirt with lager size has bigger body shape'));
+COMMENT ON COLUMN "member".phone IS 'The best telephone at which to contact the member';
+COMMENT ON COLUMN "member".zip IS 'the zip code of the member''s hometown';
+COMMENT ON COLUMN "member".link_to_major IS 'The unique identifier of the major of the member. References the Major table';
 
 COMMENT ON COLUMN zip_code.zip_code IS 'The ZIP code itself. A five-digit number identifying a US post office.';
 COMMENT ON COLUMN zip_code."type" IS 'The kind of ZIP code';

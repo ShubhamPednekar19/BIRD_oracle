@@ -24,7 +24,7 @@ Requirements:
 
 import argparse
 import csv
-import html
+import html as html_module
 import json
 import os
 import re
@@ -32,8 +32,9 @@ import signal
 import sys
 import threading
 import time
-import webbrowser
+import threading
 from dataclasses import dataclass, field
+from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Tuple
@@ -1316,6 +1317,137 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
     print(f"Summary written to: {filepath}")
 
 
+def _html_table(headers: List[str], rows: List[List[str]]) -> str:
+    """Build an HTML <table> string from headers and rows."""
+    lines = ['<table border="1" cellpadding="6" cellspacing="0" '
+             'style="border-collapse:collapse; font-family:monospace; font-size:13px;">']
+    lines.append('<thead><tr>')
+    for h in headers:
+        lines.append(f'  <th style="background:#f2f2f2;">{html_module.escape(str(h))}</th>')
+    lines.append('</tr></thead>')
+    lines.append('<tbody>')
+    for row in rows:
+        lines.append('<tr>')
+        for cell in row:
+            lines.append(f'  <td>{html_module.escape(str(cell))}</td>')
+        lines.append('</tr>')
+    lines.append('</tbody></table>')
+    return '\n'.join(lines)
+
+
+def write_html_report(results: List[EvaluationResult],
+                      summaries: List['DatabaseSummary'],
+                      filepath: str):
+    """Write a combined HTML report with summary and per-query results."""
+
+    # --- Summary table ---
+    summary_headers = [
+        'db_id', 'total_questions', 'successful_queries', 'failed_queries',
+        'avg_execution_time_ms',
+        'avg_table_precision', 'avg_table_recall', 'avg_table_f1',
+        'avg_column_precision', 'avg_column_recall', 'avg_column_f1',
+        'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate',
+        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10',
+        'avg_table_mrr', 'avg_table_jaccard', 'table_exact_match_rate',
+        'avg_joint_column_precision', 'avg_joint_column_recall', 'avg_joint_column_f1',
+    ]
+    summary_rows = []
+    for s in summaries:
+        summary_rows.append([
+            s.db_id, str(s.total_questions), str(s.successful_queries),
+            str(s.failed_queries), f"{s.avg_execution_time_ms:.2f}",
+            f"{s.avg_table_precision:.4f}", f"{s.avg_table_recall:.4f}",
+            f"{s.avg_table_f1:.4f}", f"{s.avg_column_precision:.4f}",
+            f"{s.avg_column_recall:.4f}", f"{s.avg_column_f1:.4f}",
+            f"{s.table_hit_at_1_rate:.4f}", f"{s.table_hit_at_3_rate:.4f}",
+            f"{s.table_hit_at_5_rate:.4f}", f"{s.avg_table_recall_at_3:.4f}",
+            f"{s.avg_table_recall_at_5:.4f}", f"{s.avg_table_recall_at_10:.4f}",
+            f"{s.avg_table_mrr:.4f}", f"{s.avg_table_jaccard:.4f}",
+            f"{s.table_exact_match_rate:.4f}",
+            f"{s.avg_joint_column_precision:.4f}",
+            f"{s.avg_joint_column_recall:.4f}",
+            f"{s.avg_joint_column_f1:.4f}",
+        ])
+
+    # --- Results table ---
+    result_headers = [
+        'question_id', 'db_id', 'question', 'execution_time_ms',
+        'num_expected_tables', 'num_expected_columns',
+        'expected_tables', 'discovered_tables',
+        'table_precision', 'table_recall', 'table_f1',
+        'column_precision', 'column_recall', 'column_f1',
+        'table_hit_at_1', 'table_hit_at_3', 'table_hit_at_5',
+        'table_mrr', 'table_jaccard', 'table_exact_match',
+        'joint_column_precision', 'joint_column_recall', 'joint_column_f1',
+        'error',
+    ]
+    result_rows = []
+    for r in results:
+        result_rows.append([
+            str(r.question_id), r.db_id, r.question[:200],
+            f"{r.execution_time_ms:.2f}",
+            str(r.num_expected_tables), str(r.num_expected_columns),
+            '|'.join(r.expected_tables), '|'.join(r.discovered_tables),
+            f"{r.table_precision:.4f}", f"{r.table_recall:.4f}",
+            f"{r.table_f1:.4f}", f"{r.column_precision:.4f}",
+            f"{r.column_recall:.4f}", f"{r.column_f1:.4f}",
+            str(r.table_hit_at_1), str(r.table_hit_at_3),
+            str(r.table_hit_at_5), f"{r.table_mrr:.4f}",
+            f"{r.table_jaccard:.4f}", str(r.table_exact_match),
+            f"{r.joint_column_precision:.4f}",
+            f"{r.joint_column_recall:.4f}",
+            f"{r.joint_column_f1:.4f}",
+            r.error or '',
+        ])
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hybrid Search Evaluation Report</title>
+<style>
+  body {{ font-family: sans-serif; margin: 20px; }}
+  h1, h2 {{ color: #333; }}
+  table {{ margin-bottom: 30px; }}
+  td, th {{ text-align: left; white-space: nowrap; }}
+  .wrap {{ overflow-x: auto; }}
+</style>
+</head>
+<body>
+<h1>Oracle Hybrid Search Evaluation Report</h1>
+<p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+
+<h2>Database Summary</h2>
+<div class="wrap">
+{_html_table(summary_headers, summary_rows)}
+</div>
+
+<h2>Per-Query Results ({len(results)} queries)</h2>
+<div class="wrap">
+{_html_table(result_headers, result_rows)}
+</div>
+</body>
+</html>"""
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+    print(f"HTML report written to: {filepath}")
+
+
+def start_local_server(directory: str, port: int = 8000):
+    """Start a local HTTP server to serve files from the given directory."""
+    handler = partial(SimpleHTTPRequestHandler, directory=directory)
+    server = HTTPServer(('localhost', port), handler)
+    print(f"\nServing HTML report at http://localhost:{port}/")
+    print("Press Ctrl+C to stop the server.\n")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+        server.server_close()
+
+
 def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSummary:
     """Calculate summary metrics for a database."""
     summary = DatabaseSummary(db_id=db_id)
@@ -2028,17 +2160,21 @@ def main():
         help='Maximum number of databases to process (default: all)'
     )
     parser.add_argument(
-        '--output-format', '-f',
-        nargs='+',
-        choices=['csv', 'browser'],
-        default=['csv'],
-        help='Output format(s): csv, browser, or both (default: csv)'
+        '--html',
+        default=None,
+        help='Output HTML report file path (e.g. report.html). If not set, no HTML is generated.'
     )
     parser.add_argument(
-        '--port', '-p',
+        '--serve',
+        action='store_true',
+        default=False,
+        help='Start a local HTTP server to view the HTML report after generation'
+    )
+    parser.add_argument(
+        '--port',
         type=int,
-        default=8787,
-        help='Port for browser results server (default: 8787)'
+        default=8000,
+        help='Port for the local HTTP server (default: 8000)'
     )
 
     args = parser.parse_args()
@@ -2129,8 +2265,11 @@ def main():
             if all_summaries:
                 write_summary_csv(all_summaries, args.summary)
 
-        # Print overall summary (always)
-        if all_summaries:
+            # Write HTML report if requested
+            if args.html:
+                write_html_report(all_results, all_summaries, args.html)
+
+            # Print overall summary
             print(f"\n{'='*60}")
             print("OVERALL SUMMARY")
             print(f"{'='*60}")
@@ -2151,25 +2290,10 @@ def main():
     finally:
         oracle_mgr.close()
 
-    # Launch browser server (after DB connection is closed)
-    if 'browser' in output_formats and all_results:
-        run_params = {
-            'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
-            'ddl_dir': args.ddl_dir,
-            'metadata_file': args.metadata_file,
-            'index_script': args.index_script,
-            'databases': ', '.join(sorted(ddl_folders)) if not args.databases else ', '.join(args.databases),
-            'test_mode': args.test,
-            'max_questions': args.max_questions or 'all',
-            'max_databases': args.max_databases or 'all',
-            'output_formats': ', '.join(output_formats),
-            'discover_k': 10,
-            'discover_k0': 50,
-            'discover_cols_per_obj': 5,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-        html_content = generate_results_html(all_results, all_summaries, run_params)
-        start_results_server(html_content, port=args.port)
+    # Start local server if requested (after DB cleanup)
+    if args.serve and args.html and os.path.isfile(args.html):
+        html_dir = os.path.dirname(os.path.abspath(args.html))
+        start_local_server(html_dir, args.port)
 
     return 0
 
