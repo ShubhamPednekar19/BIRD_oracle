@@ -30,9 +30,9 @@ import os
 import re
 import signal
 import sys
-import threading
 import time
 import threading
+import webbrowser
 from dataclasses import dataclass, field
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -101,6 +101,7 @@ class EvaluationResult:
     """Stores evaluation metrics for a single query."""
     question_id: int
     db_id: str
+    evidence: str
     question: str
     execution_time_ms: float
 
@@ -1213,7 +1214,7 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
             row = {
                 'question_id': result.question_id,
                 'db_id': result.db_id,
-                'question': result.question[:200],  # Truncate long questions
+                'question': (result.question + " " + result.evidence)[:200],  # Truncate long questions
                 'execution_time_ms': f"{result.execution_time_ms:.2f}",
                 'num_expected_tables': result.num_expected_tables,
                 'num_expected_columns': result.num_expected_columns,
@@ -1384,7 +1385,7 @@ def write_html_report(results: List[EvaluationResult],
     result_rows = []
     for r in results:
         result_rows.append([
-            str(r.question_id), r.db_id, r.question[:200],
+            str(r.question_id), r.db_id, (r.question + " " + r.evidence)[:200],
             f"{r.execution_time_ms:.2f}",
             str(r.num_expected_tables), str(r.num_expected_columns),
             '|'.join(r.expected_tables), '|'.join(r.discovered_tables),
@@ -1520,14 +1521,14 @@ def generate_results_html(results: List[EvaluationResult],
     # --- Build params table rows ---
     param_rows = ""
     for key, val in run_params.items():
-        param_rows += f"<tr><td>{html.escape(str(key))}</td><td>{html.escape(str(val))}</td></tr>\n"
+        param_rows += f"<tr><td>{html_module.escape(str(key))}</td><td>{html_module.escape(str(val))}</td></tr>\n"
 
     # --- Build summary table rows ---
     summary_rows = ""
     for s in summaries:
         summary_rows += (
             f"<tr>"
-            f"<td>{html.escape(s.db_id)}</td>"
+            f"<td>{html_module.escape(s.db_id)}</td>"
             f"<td>{s.total_questions}</td>"
             f"<td>{s.successful_queries}</td>"
             f"<td>{s.failed_queries}</td>"
@@ -1564,16 +1565,16 @@ def generate_results_html(results: List[EvaluationResult],
                 f1_class = ' class="poor"'
 
         # Escape JSON for safe embedding in HTML data attributes
-        esc_expected = html.escape(r.expected_json or '[]')
-        esc_discovered = html.escape(r.discovered_json or '[]')
-        esc_question = html.escape(r.question)
+        esc_expected = html_module.escape(r.expected_json or '[]')
+        esc_discovered = html_module.escape(r.discovered_json or '[]')
+        esc_question = html_module.escape(r.question)
 
         result_rows += (
             f'<tr{error_class} data-question="{esc_question}" '
             f'data-expected="{esc_expected}" data-discovered="{esc_discovered}">'
             f"<td>{r.question_id}</td>"
-            f"<td>{html.escape(r.db_id)}</td>"
-            f"<td class='question-col'>{html.escape(r.question[:120])}</td>"
+            f"<td>{html_module.escape(r.db_id)}</td>"
+            f"<td class='question-col'>{html_module.escape(r.question + " " + r.evidence)[:120]}</td>"
             f"<td>{r.execution_time_ms:.1f}</td>"
             f"<td>{', '.join(r.expected_tables)}</td>"
             f"<td>{', '.join(r.discovered_tables)}</td>"
@@ -1589,7 +1590,7 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{r.table_mrr:.4f}</td>"
             f"<td>{r.topn_table_accuracy:.2%}</td>"
             f"<td>{r.topn_column_accuracy:.2%}</td>"
-            f"<td>{html.escape(r.error or '')}</td>"
+            f"<td>{html_module.escape(r.error or '')}</td>"
             f"</tr>\n"
         )
 
@@ -1685,7 +1686,7 @@ def generate_results_html(results: List[EvaluationResult],
 <body>
 
 <h1>Oracle Hybrid Search Evaluation</h1>
-<div class="timestamp">Run: {html.escape(timestamp)}</div>
+<div class="timestamp">Run: {html_module.escape(timestamp)}</div>
 
 <!-- Overall KPI cards -->
 <div class="cards">
@@ -1991,6 +1992,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     for i, question in enumerate(questions):
         question_id = question.get('question_id', i)
         question_text = question.get('question', '')
+        evidence = question.get('evidence', '')
 
         # Get expected objects
         expected_objs = get_expected_objects(question)
@@ -2004,6 +2006,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             question_id=question_id,
             db_id=db_id,
             question=question_text,
+            evidence=evidence,
             execution_time_ms=0.0,
             expected_tables=expected_tables,
             expected_columns=expected_columns,
@@ -2020,7 +2023,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         # Call discover_objects
         try:
             discovered, exec_time = oracle_mgr.discover_objects(
-                query=question_text,
+                query=question_text + " " + evidence,
                 k=10,
                 k0=50,
                 cols_per_obj=5
@@ -2160,6 +2163,13 @@ def main():
         help='Maximum number of databases to process (default: all)'
     )
     parser.add_argument(
+        '--output-format', '-f',
+        nargs='+',
+        choices=['csv', 'browser'],
+        default=['csv'],
+        help='Output format(s): csv, browser, or both (default: csv)'
+    )
+    parser.add_argument(
         '--html',
         default=None,
         help='Output HTML report file path (e.g. report.html). If not set, no HTML is generated.'
@@ -2265,30 +2275,50 @@ def main():
             if all_summaries:
                 write_summary_csv(all_summaries, args.summary)
 
-            # Write HTML report if requested
-            if args.html:
-                write_html_report(all_results, all_summaries, args.html)
+        # Write HTML report if requested
+        if args.html:
+            write_html_report(all_results, all_summaries, args.html)
 
-            # Print overall summary
-            print(f"\n{'='*60}")
-            print("OVERALL SUMMARY")
-            print(f"{'='*60}")
+        # Print overall summary
+        print(f"\n{'='*60}")
+        print("OVERALL SUMMARY")
+        print(f"{'='*60}")
 
-            total_questions = sum(s.total_questions for s in all_summaries)
-            total_successful = sum(s.successful_queries for s in all_summaries)
+        total_questions = sum(s.total_questions for s in all_summaries)
+        total_successful = sum(s.successful_queries for s in all_summaries)
 
-            if total_successful > 0:
-                avg_f1 = sum(s.avg_table_f1 * s.successful_queries for s in all_summaries) / total_successful
-                avg_hit1 = sum(s.table_hit_at_1_rate * s.successful_queries for s in all_summaries) / total_successful
+        if total_successful > 0:
+            avg_f1 = sum(s.avg_table_f1 * s.successful_queries for s in all_summaries) / total_successful
+            avg_hit1 = sum(s.table_hit_at_1_rate * s.successful_queries for s in all_summaries) / total_successful
 
-                print(f"Total databases: {len(all_summaries)}")
-                print(f"Total questions: {total_questions}")
-                print(f"Successful queries: {total_successful}")
-                print(f"Overall avg table F1: {avg_f1:.4f}")
-                print(f"Overall Hit@1 rate: {avg_hit1:.2%}")
+            print(f"Total databases: {len(all_summaries)}")
+            print(f"Total questions: {total_questions}")
+            print(f"Successful queries: {total_successful}")
+            print(f"Overall avg table F1: {avg_f1:.4f}")
+            print(f"Overall Hit@1 rate: {avg_hit1:.2%}")
 
     finally:
         oracle_mgr.close()
+
+    # Launch browser server (after DB connection is closed)
+    if 'browser' in output_formats and all_results:
+        run_params = {
+            'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
+            'ddl_dir': args.ddl_dir,
+            'metadata_file': args.metadata_file,
+            'index_script': args.index_script,
+            'databases': ', '.join(sorted(ddl_folders)) if not args.databases else ', '.join(args.databases),
+            'test_mode': args.test,
+            'max_questions': args.max_questions or 'all',
+            'max_databases': args.max_databases or 'all',
+            'output_formats': ', '.join(output_formats),
+            'discover_k': 10,
+            'discover_k0': 50,
+            'discover_cols_per_obj': 5,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        html_content = generate_results_html(all_results, all_summaries, run_params)
+        start_results_server(html_content, port=args.port)
 
     # Start local server if requested (after DB cleanup)
     if args.serve and args.html and os.path.isfile(args.html):
