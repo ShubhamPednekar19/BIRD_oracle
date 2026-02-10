@@ -1574,7 +1574,7 @@ def generate_results_html(results: List[EvaluationResult],
             f'data-expected="{esc_expected}" data-discovered="{esc_discovered}">'
             f"<td>{r.question_id}</td>"
             f"<td>{html_module.escape(r.db_id)}</td>"
-            f"<td class='question-col'>{html_module.escape(r.question + " " + r.evidence)[:120]}</td>"
+            f"<td class='question-col'>{html_module.escape(r.question + ' ' + r.evidence)[:120]}</td>"
             f"<td>{r.execution_time_ms:.1f}</td>"
             f"<td>{', '.join(r.expected_tables)}</td>"
             f"<td>{', '.join(r.discovered_tables)}</td>"
@@ -1681,6 +1681,12 @@ def generate_results_html(results: List[EvaluationResult],
     font-size: 1.2rem; color: #747d8c; background: none; border: none;
   }}
   #detailPopup .close-btn:hover {{ color: var(--poor); }}
+
+  /* Sortable table headers */
+  th.sortable {{ cursor: pointer; user-select: none; position: relative; padding-right: 18px; }}
+  th.sortable::after {{ content: '⇅'; position: absolute; right: 6px; color: #a4b0be; font-size: 0.72rem; }}
+  th.sortable.sort-asc::after {{ content: '▲'; color: #2f3542; }}
+  th.sortable.sort-desc::after {{ content: '▼'; color: #2f3542; }}
 </style>
 </head>
 <body>
@@ -1707,25 +1713,33 @@ def generate_results_html(results: List[EvaluationResult],
 
 <!-- Tab: Run Parameters -->
 <div class="section tab-content active" id="tab-params">
-  <table class="params-table">
-    <tr><th>Parameter</th><th>Value</th></tr>
-    {param_rows}
+  <table class="params-table sortable-table" id="paramsTable">
+    <thead>
+      <tr><th>Parameter</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      {param_rows}
+    </tbody>
   </table>
 </div>
 
 <!-- Tab: Database Summary -->
 <div class="section tab-content" id="tab-summary">
-  <table>
-    <tr>
-      <th>Database</th><th>Questions</th><th>Success</th><th>Failed</th>
-      <th>Avg Time (ms)</th>
-      <th>Table P</th><th>Table R</th><th>Table F1</th>
-      <th>Col P</th><th>Col R</th><th>Col F1</th>
-      <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
-      <th>MRR</th><th>Jaccard</th><th>Exact Match</th><th>Joint Col F1</th>
-      <th>Top-N Tbl</th><th>Top-N Col</th>
-    </tr>
-    {summary_rows}
+  <table class="sortable-table" id="summaryTable">
+    <thead>
+      <tr>
+        <th>Database</th><th>Questions</th><th>Success</th><th>Failed</th>
+        <th>Avg Time (ms)</th>
+        <th>Table P</th><th>Table R</th><th>Table F1</th>
+        <th>Col P</th><th>Col R</th><th>Col F1</th>
+        <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
+        <th>MRR</th><th>Jaccard</th><th>Exact Match</th><th>Joint Col F1</th>
+        <th>Top-N Tbl</th><th>Top-N Col</th>
+      </tr>
+    </thead>
+    <tbody>
+      {summary_rows}
+    </tbody>
   </table>
 </div>
 
@@ -1739,7 +1753,7 @@ def generate_results_html(results: List[EvaluationResult],
     <label>Search:</label>
     <input type="text" id="searchFilter" placeholder="Filter by question..." oninput="filterResults()">
   </div>
-  <table id="resultsTable">
+  <table id="resultsTable" class="sortable-table">
     <thead>
       <tr>
         <th>ID</th><th>Database</th><th>Question</th><th>Time (ms)</th>
@@ -1815,6 +1829,63 @@ def generate_results_html(results: List[EvaluationResult],
       row.style.display = show ? '' : 'none';
     }});
   }}
+
+  // Make table columns sortable
+  function parseSortValue(raw) {{
+    const text = (raw || '').trim();
+    if (text === '') return '';
+
+    const normalized = text.toLowerCase();
+    if (normalized === 'y' || normalized === 'yes' || normalized === 'true') return 1;
+    if (normalized === 'n' || normalized === 'no' || normalized === 'false') return 0;
+
+    const numericCandidate = text.replace(/,/g, '').replace(/%/g, '');
+    const asNumber = Number(numericCandidate);
+    if (!Number.isNaN(asNumber) && numericCandidate !== '') return asNumber;
+
+    return normalized;
+  }}
+
+  function makeTableSortable(table) {{
+    const headers = table.querySelectorAll('thead th');
+    const tbody = table.querySelector('tbody');
+    if (!headers.length || !tbody) return;
+
+    headers.forEach((header, colIndex) => {{
+      header.classList.add('sortable');
+      header.addEventListener('click', function() {{
+        const currentOrder = header.dataset.sortOrder === 'asc' ? 'asc' : 'desc';
+        const newOrder = currentOrder === 'asc' ? 'desc' : 'asc';
+
+        headers.forEach(h => {{
+          h.classList.remove('sort-asc', 'sort-desc');
+          delete h.dataset.sortOrder;
+        }});
+        header.classList.add(newOrder === 'asc' ? 'sort-asc' : 'sort-desc');
+        header.dataset.sortOrder = newOrder;
+
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {{
+          const aText = a.children[colIndex]?.textContent || '';
+          const bText = b.children[colIndex]?.textContent || '';
+          const aVal = parseSortValue(aText);
+          const bVal = parseSortValue(bText);
+
+          let cmp = 0;
+          if (typeof aVal === 'number' && typeof bVal === 'number') {{
+            cmp = aVal - bVal;
+          }} else {{
+            cmp = String(aVal).localeCompare(String(bVal));
+          }}
+          return newOrder === 'asc' ? cmp : -cmp;
+        }});
+
+        rows.forEach(r => tbody.appendChild(r));
+      }});
+    }});
+  }}
+
+  document.querySelectorAll('.sortable-table').forEach(makeTableSortable);
 
   // Detail popup logic
   const popup = document.getElementById('detailPopup');
@@ -2163,16 +2234,15 @@ def main():
         help='Maximum number of databases to process (default: all)'
     )
     parser.add_argument(
-        '--output-format', '-f',
-        nargs='+',
+        '--output-source', '-f',
         choices=['csv', 'browser'],
-        default=['csv'],
-        help='Output format(s): csv, browser, or both (default: csv)'
+        default='csv',
+        help='Primary output source: csv or browser (default: csv)'
     )
     parser.add_argument(
         '--html',
-        default=None,
-        help='Output HTML report file path (e.g. report.html). If not set, no HTML is generated.'
+        default='report.html',
+        help='Output HTML report file path (default: report.html)'
     )
     parser.add_argument(
         '--serve',
@@ -2243,6 +2313,9 @@ def main():
         print("Failed to connect to Oracle as SYSDBA")
         return 1
 
+    output_source = args.output_source
+    html_content = ""
+
     try:
         all_results = []
         all_summaries = []
@@ -2266,18 +2339,34 @@ def main():
             all_results.extend(results)
             all_summaries.append(summary)
 
-        output_formats = args.output_format
-
         # Write CSV results
-        if 'csv' in output_formats:
+        if output_source == 'csv':
             if all_results:
                 write_results_csv(all_results, args.output)
             if all_summaries:
                 write_summary_csv(all_summaries, args.summary)
 
-        # Write HTML report if requested
-        if args.html:
-            write_html_report(all_results, all_summaries, args.html)
+        run_params = {
+            'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
+            'ddl_dir': args.ddl_dir,
+            'metadata_file': args.metadata_file,
+            'index_script': args.index_script,
+            'databases': ', '.join(sorted(ddl_folders)) if not args.databases else ', '.join(args.databases),
+            'test_mode': args.test,
+            'max_questions': args.max_questions or 'all',
+            'max_databases': args.max_databases or 'all',
+            'output_source': output_source,
+            'discover_k': 10,
+            'discover_k0': 50,
+            'discover_cols_per_obj': 5,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
+        html_content = generate_results_html(all_results, all_summaries, run_params)
+
+        with open(args.html, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        print(f"HTML report written to: {args.html}")
 
         # Print overall summary
         print(f"\n{'='*60}")
@@ -2301,23 +2390,7 @@ def main():
         oracle_mgr.close()
 
     # Launch browser server (after DB connection is closed)
-    if 'browser' in output_formats and all_results:
-        run_params = {
-            'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
-            'ddl_dir': args.ddl_dir,
-            'metadata_file': args.metadata_file,
-            'index_script': args.index_script,
-            'databases': ', '.join(sorted(ddl_folders)) if not args.databases else ', '.join(args.databases),
-            'test_mode': args.test,
-            'max_questions': args.max_questions or 'all',
-            'max_databases': args.max_databases or 'all',
-            'output_formats': ', '.join(output_formats),
-            'discover_k': 10,
-            'discover_k0': 50,
-            'discover_cols_per_obj': 5,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-        html_content = generate_results_html(all_results, all_summaries, run_params)
+    if output_source == 'browser' and all_results:
         start_results_server(html_content, port=args.port)
 
     # Start local server if requested (after DB cleanup)
