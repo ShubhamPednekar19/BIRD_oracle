@@ -11,7 +11,7 @@ The evaluation pipeline:
 3. **Sets up hybrid vector search** using the `developer` package
 4. **Runs natural language queries** from `dev_with_metadata.json`
 5. **Compares discovered objects** with expected tables/columns
-6. **Generates metrics** and exports to CSV and/or browser dashboard
+6. **Generates metrics** and exports to CSV or browser dashboard, plus an HTML report file
 7. **Cleans up** by dropping users after processing
 
 ## Prerequisites
@@ -84,12 +84,27 @@ python run_hybrid_search_evaluation.py \
 
 ### HTML Report Output
 
-Generate an HTML report alongside CSV files:
+An HTML report is now always generated. By default it is saved as `report.html`:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1"
+```
+
+Use `--html` to customize the file name/path:
 
 ```bash
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
-  --html report.html
+  --html my_custom_report.html
+```
+
+Use `--output-source` to choose between CSV output and browser mode:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --output-source browser
 ```
 
 ### HTML Report with Local Server
@@ -138,7 +153,8 @@ Then open `http://localhost:8000/report.html` in your browser.
 | `--test` | `-t` | false | Run in test mode |
 | `--max-questions` | `-q` | all | Max questions per database |
 | `--max-databases` | `-n` | all | Max databases to process |
-| `--html` | | none | Output HTML report file path (e.g. `report.html`) |
+| `--output-source` | `-f` | `csv` | Primary output source: `csv` or `browser` |
+| `--html` | | `report.html` | Output HTML report file path |
 | `--serve` | | false | Start a local HTTP server to view the HTML report |
 | `--port` | | 8000 | Port for the local HTTP server |
 
@@ -220,9 +236,9 @@ Per-database aggregated metrics:
 | `avg_joint_column_recall` | Average joint column recall |
 | `avg_joint_column_f1` | Average joint column F1 |
 
-### HTML Report (optional)
+### HTML Report
 
-When `--html <file>` is provided, a single HTML file is generated that contains both the database summary table and the per-query results table. The file can be opened directly in any browser or served via a local HTTP server using `--serve`.
+A single HTML file is always generated (default: `report.html`) that contains the same styled and interactive dashboard used by browser mode. The file can be opened directly in any browser or served via a local HTTP server using `--serve`. Use `--html <file>` to change the file name/path.
 
 ## Evaluation Metrics
 
