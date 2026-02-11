@@ -2000,7 +2000,7 @@ def start_results_server(html_content: str, port: int = 8787):
 
 def process_database(oracle_mgr: OracleManager, db_id: str,
                     ddl_folder: str, questions: List[Dict],
-                    index_script: str) -> Tuple[List[EvaluationResult], DatabaseSummary]:
+                    index_script: str) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
     """
     Process a single database: create user, run DDL, evaluate queries.
 
@@ -2012,7 +2012,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         index_script: Path to index_creation.sql
 
     Returns:
-        Tuple of (list of evaluation results, database summary)
+        Tuple of (list of evaluation results, database summary, index setup time in ms)
     """
     results = []
 
@@ -2025,7 +2025,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         print(f"  Failed to create user for {db_id}")
         summary = DatabaseSummary(db_id=db_id, total_questions=len(questions),
                                    failed_queries=len(questions))
-        return results, summary
+        return results, summary, 0.0
 
     # Step 2: Connect as user
     if not oracle_mgr.connect_as_user(db_id):
@@ -2033,7 +2033,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         oracle_mgr.drop_user(db_id)
         summary = DatabaseSummary(db_id=db_id, total_questions=len(questions),
                                    failed_queries=len(questions))
-        return results, summary
+        return results, summary, 0.0
 
     # Step 3: Execute DDL files
     ddl_file = os.path.join(ddl_folder, f"{db_id}_oracle.sql")
@@ -2046,6 +2046,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         oracle_mgr.execute_ddl_file(metadata_file)
 
     # Step 4: Execute index creation script and setup hybrid search
+    index_setup_start = time.perf_counter()
     package_installed = oracle_mgr.execute_index_creation(index_script)
 
     # Step 5: Call refresh_data and setup_hybrid_search (only if package was installed)
@@ -2056,6 +2057,8 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
             print(f"  Note: developer package not available, skipping hybrid search setup")
     else:
         print(f"  Note: Skipping hybrid search setup (package not installed)")
+    index_setup_time_ms = (time.perf_counter() - index_setup_start) * 1000
+    print(f"  Index setup time: {index_setup_time_ms:.2f}ms")
 
     # Step 6: Process questions
     results, summary = evaluate_questions_for_db(oracle_mgr, db_id, questions)
@@ -2063,7 +2066,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     # Step 7: Drop user
     oracle_mgr.drop_user(db_id)
 
-    return results, summary
+    return results, summary, index_setup_time_ms
 
 
 def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
@@ -2194,7 +2197,7 @@ def process_databases_single_user(
     index_script: str,
     max_questions: Optional[int],
     username: str,
-) -> Tuple[List[EvaluationResult], List[DatabaseSummary]]:
+) -> Tuple[List[EvaluationResult], List[DatabaseSummary], float]:
     """Load all schemas into one user and evaluate all queries in that shared schema."""
     all_results: List[EvaluationResult] = []
     all_summaries: List[DatabaseSummary] = []
@@ -2212,7 +2215,7 @@ def process_databases_single_user(
             all_summaries.append(
                 DatabaseSummary(db_id=db_id, total_questions=len(questions), failed_queries=len(questions))
             )
-        return all_results, all_summaries
+        return all_results, all_summaries, 0.0
 
     if not oracle_mgr.connect_as_user(username):
         print(f"  Failed to connect as {username}")
@@ -2224,7 +2227,7 @@ def process_databases_single_user(
             all_summaries.append(
                 DatabaseSummary(db_id=db_id, total_questions=len(questions), failed_queries=len(questions))
             )
-        return all_results, all_summaries
+        return all_results, all_summaries, 0.0
 
     print("\nLoading DDL for all selected databases into one schema...")
     for db_id in db_ids:
@@ -2238,6 +2241,7 @@ def process_databases_single_user(
         if os.path.exists(metadata_file):
             oracle_mgr.execute_ddl_file(metadata_file)
 
+    index_setup_start = time.perf_counter()
     package_installed = oracle_mgr.execute_index_creation(index_script)
     if package_installed:
         refresh_ok = oracle_mgr.call_refresh_data()
@@ -2246,6 +2250,8 @@ def process_databases_single_user(
             print("  Note: developer package not available, skipping hybrid search setup")
     else:
         print("  Note: Skipping hybrid search setup (package not installed)")
+    index_setup_time_ms = (time.perf_counter() - index_setup_start) * 1000
+    print(f"  Index setup time (single user): {index_setup_time_ms:.2f}ms")
 
     for db_id in db_ids:
         questions = questions_by_db.get(db_id, [])
@@ -2260,7 +2266,7 @@ def process_databases_single_user(
         all_summaries.append(summary)
 
     oracle_mgr.drop_user(username)
-    return all_results, all_summaries
+    return all_results, all_summaries, index_setup_time_ms
 
 
 def main():
@@ -2416,8 +2422,9 @@ def main():
     try:
         all_results = []
         all_summaries = []
+        total_index_setup_time_ms = 0.0
         if args.single_user_mode:
-            all_results, all_summaries = process_databases_single_user(
+            all_results, all_summaries, total_index_setup_time_ms = process_databases_single_user(
                 oracle_mgr=oracle_mgr,
                 db_ids=sorted(ddl_folders),
                 ddl_dir=args.ddl_dir,
@@ -2439,12 +2446,13 @@ def main():
                 if args.max_questions is not None:
                     questions = questions[:args.max_questions]
 
-                results, summary = process_database(
+                results, summary, index_setup_time_ms = process_database(
                     oracle_mgr, db_id, ddl_folder, questions, args.index_script
                 )
 
                 all_results.extend(results)
                 all_summaries.append(summary)
+                total_index_setup_time_ms += index_setup_time_ms
 
         # Write CSV results
         if output_source == 'csv':
@@ -2466,6 +2474,7 @@ def main():
             'discover_k': 10,
             'discover_k0': 50,
             'discover_cols_per_obj': 5,
+            'index_setup_time_ms': f'{total_index_setup_time_ms:.2f}',
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
