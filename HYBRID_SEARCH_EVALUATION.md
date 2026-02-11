@@ -14,6 +14,8 @@ The evaluation pipeline:
 6. **Generates metrics** and exports to CSV or browser dashboard, plus an HTML report file
 7. **Cleans up** by dropping users after processing
 
+You can also run in a **single-user mode** where all selected schemas are loaded into one Oracle user and all queries are evaluated in that shared schema.
+
 ## Prerequisites
 
 ### Python Dependencies
@@ -64,6 +66,25 @@ Test mode automatically:
 - Limits to 2 databases
 - Limits to 5 questions per database
 - Prefixes output files with `test_`
+
+### Single User Mode
+
+Use a shared Oracle user for all selected schemas:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --single-user-mode
+```
+
+Use a custom shared username (password is the same as username):
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --single-user-mode \
+  --single-user-name BIRD_ALL
+```
 
 ### Custom Limits
 
@@ -157,6 +178,8 @@ Then open `http://localhost:8000/report.html` in your browser.
 | `--html` | | `report.html` | Output HTML report file path |
 | `--serve` | | false | Start a local HTTP server to view the HTML report |
 | `--port` | | 8000 | Port for the local HTTP server |
+| `--single-user-mode` | | false | Load all selected schemas into one Oracle user and run all queries there |
+| `--single-user-name` | | `BIRD_ALL` | Username for `--single-user-mode` (password is the same as username) |
 
 ## Output Files
 
@@ -239,6 +262,8 @@ Per-database aggregated metrics:
 ### HTML Report
 
 A single HTML file is always generated (default: `report.html`) that contains the same styled and interactive dashboard used by browser mode. The file can be opened directly in any browser or served via a local HTTP server using `--serve`. Use `--html <file>` to change the file name/path.
+
+The **Run Parameters** section in the HTML report includes `index_setup_time_ms`, which is the total time spent running index/package setup for the run (in single-user mode this is the one-time shared setup time).
 
 ## Evaluation Metrics
 
