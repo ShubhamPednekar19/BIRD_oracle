@@ -2058,7 +2058,20 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         print(f"  Note: Skipping hybrid search setup (package not installed)")
 
     # Step 6: Process questions
-    print(f"\n  Processing {len(questions)} questions...")
+    results, summary = evaluate_questions_for_db(oracle_mgr, db_id, questions)
+
+    # Step 7: Drop user
+    oracle_mgr.drop_user(db_id)
+
+    return results, summary
+
+
+def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
+                              questions: List[Dict]) -> Tuple[List[EvaluationResult], DatabaseSummary]:
+    """Evaluate all questions for one db_id using the current connected user."""
+    results = []
+
+    print(f"\n  Processing {len(questions)} questions for {db_id}...")
 
     for i, question in enumerate(questions):
         question_id = question.get('question_id', i)
@@ -2159,9 +2172,6 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         if (i + 1) % 10 == 0:
             print(f"    Processed {i + 1}/{len(questions)} questions...")
 
-    # Step 7: Drop user
-    oracle_mgr.drop_user(db_id)
-
     # Calculate summary
     summary = calculate_summary(db_id, results)
 
@@ -2174,6 +2184,83 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     print(f"    Hit@1: {summary.table_hit_at_1_rate:.2%}")
 
     return results, summary
+
+
+def process_databases_single_user(
+    oracle_mgr: OracleManager,
+    db_ids: List[str],
+    ddl_dir: str,
+    questions_by_db: Dict[str, List[Dict]],
+    index_script: str,
+    max_questions: Optional[int],
+    username: str,
+) -> Tuple[List[EvaluationResult], List[DatabaseSummary]]:
+    """Load all schemas into one user and evaluate all queries in that shared schema."""
+    all_results: List[EvaluationResult] = []
+    all_summaries: List[DatabaseSummary] = []
+
+    print(f"\n{'='*60}")
+    print(f"Processing all databases in single user mode: {username}")
+    print(f"{'='*60}")
+
+    if not oracle_mgr.create_user(username):
+        print(f"  Failed to create user for single-user mode: {username}")
+        for db_id in db_ids:
+            questions = questions_by_db.get(db_id, [])
+            if max_questions is not None:
+                questions = questions[:max_questions]
+            all_summaries.append(
+                DatabaseSummary(db_id=db_id, total_questions=len(questions), failed_queries=len(questions))
+            )
+        return all_results, all_summaries
+
+    if not oracle_mgr.connect_as_user(username):
+        print(f"  Failed to connect as {username}")
+        oracle_mgr.drop_user(username)
+        for db_id in db_ids:
+            questions = questions_by_db.get(db_id, [])
+            if max_questions is not None:
+                questions = questions[:max_questions]
+            all_summaries.append(
+                DatabaseSummary(db_id=db_id, total_questions=len(questions), failed_queries=len(questions))
+            )
+        return all_results, all_summaries
+
+    print("\nLoading DDL for all selected databases into one schema...")
+    for db_id in db_ids:
+        ddl_folder = os.path.join(ddl_dir, db_id)
+        ddl_file = os.path.join(ddl_folder, f"{db_id}_oracle.sql")
+        metadata_file = os.path.join(ddl_folder, f"{db_id}_metadata.sql")
+
+        print(f"\n  Loading schema: {db_id}")
+        if os.path.exists(ddl_file):
+            oracle_mgr.execute_ddl_file(ddl_file)
+        if os.path.exists(metadata_file):
+            oracle_mgr.execute_ddl_file(metadata_file)
+
+    package_installed = oracle_mgr.execute_index_creation(index_script)
+    if package_installed:
+        refresh_ok = oracle_mgr.call_refresh_data()
+        setup_ok = oracle_mgr.call_setup_hybrid_search()
+        if not refresh_ok and not setup_ok:
+            print("  Note: developer package not available, skipping hybrid search setup")
+    else:
+        print("  Note: Skipping hybrid search setup (package not installed)")
+
+    for db_id in db_ids:
+        questions = questions_by_db.get(db_id, [])
+        if not questions:
+            print(f"\nSkipping {db_id}: No questions found")
+            continue
+        if max_questions is not None:
+            questions = questions[:max_questions]
+
+        results, summary = evaluate_questions_for_db(oracle_mgr, db_id, questions)
+        all_results.extend(results)
+        all_summaries.append(summary)
+
+    oracle_mgr.drop_user(username)
+    return all_results, all_summaries
 
 
 def main():
@@ -2256,6 +2343,16 @@ def main():
         default=8000,
         help='Port for the local HTTP server (default: 8000)'
     )
+    parser.add_argument(
+        '--single-user-mode',
+        action='store_true',
+        help='Load all selected schemas into one Oracle user and run all queries there'
+    )
+    parser.add_argument(
+        '--single-user-name',
+        default='BIRD_ALL',
+        help='Username to use with --single-user-mode (default: BIRD_ALL)'
+    )
 
     args = parser.parse_args()
 
@@ -2319,25 +2416,35 @@ def main():
     try:
         all_results = []
         all_summaries = []
-
-        for db_id in sorted(ddl_folders):
-            ddl_folder = os.path.join(args.ddl_dir, db_id)
-            questions = questions_by_db.get(db_id, [])
-
-            if not questions:
-                print(f"\nSkipping {db_id}: No questions found")
-                continue
-
-            # Apply max_questions limit
-            if args.max_questions is not None:
-                questions = questions[:args.max_questions]
-
-            results, summary = process_database(
-                oracle_mgr, db_id, ddl_folder, questions, args.index_script
+        if args.single_user_mode:
+            all_results, all_summaries = process_databases_single_user(
+                oracle_mgr=oracle_mgr,
+                db_ids=sorted(ddl_folders),
+                ddl_dir=args.ddl_dir,
+                questions_by_db=questions_by_db,
+                index_script=args.index_script,
+                max_questions=args.max_questions,
+                username=args.single_user_name,
             )
+        else:
+            for db_id in sorted(ddl_folders):
+                ddl_folder = os.path.join(args.ddl_dir, db_id)
+                questions = questions_by_db.get(db_id, [])
 
-            all_results.extend(results)
-            all_summaries.append(summary)
+                if not questions:
+                    print(f"\nSkipping {db_id}: No questions found")
+                    continue
+
+                # Apply max_questions limit
+                if args.max_questions is not None:
+                    questions = questions[:args.max_questions]
+
+                results, summary = process_database(
+                    oracle_mgr, db_id, ddl_folder, questions, args.index_script
+                )
+
+                all_results.extend(results)
+                all_summaries.append(summary)
 
         # Write CSV results
         if output_source == 'csv':
@@ -2359,6 +2466,8 @@ def main():
             'discover_k': 10,
             'discover_k0': 50,
             'discover_cols_per_obj': 5,
+            'single_user_mode': args.single_user_mode,
+            'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
 
