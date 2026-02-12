@@ -97,6 +97,18 @@ class ExpectedObject:
 
 
 @dataclass
+class DiscoveryConfig:
+    """Configurable discovery parameters used by PL/SQL discovery procedures."""
+    k: int = 10
+    k0: int = 50
+    n: Optional[int] = None
+    m: Optional[int] = None
+    cols_per_obj: int = 5
+    alpha: float = 0.65
+    parallel_alpha: float = 0.60
+
+
+@dataclass
 class EvaluationResult:
     """Stores evaluation metrics for a single query."""
     question_id: int
@@ -132,6 +144,28 @@ class EvaluationResult:
     table_recall_at_3: float = 0.0   # Fraction of expected tables in top-3
     table_recall_at_5: float = 0.0   # Fraction of expected tables in top-5
     table_recall_at_10: float = 0.0  # Fraction of expected tables in top-10
+    table_recall_at_k: float = 0.0
+    column_recall_at_3: float = 0.0
+    column_recall_at_5: float = 0.0
+    column_recall_at_k: float = 0.0
+
+    table_precision_at_1: float = 0.0
+    table_precision_at_3: float = 0.0
+    table_precision_at_5: float = 0.0
+    table_precision_at_k: float = 0.0
+    table_f1_at_1: float = 0.0
+    table_f1_at_3: float = 0.0
+    table_f1_at_5: float = 0.0
+    table_f1_at_k: float = 0.0
+
+    column_precision_at_1: float = 0.0
+    column_precision_at_3: float = 0.0
+    column_precision_at_5: float = 0.0
+    column_precision_at_k: float = 0.0
+    column_f1_at_1: float = 0.0
+    column_f1_at_3: float = 0.0
+    column_f1_at_5: float = 0.0
+    column_f1_at_k: float = 0.0
     table_mrr: float = 0.0           # Mean Reciprocal Rank
     table_exact_match: bool = False  # All expected tables found (no more, no less)
     table_jaccard: float = 0.0       # Jaccard similarity
@@ -173,6 +207,28 @@ class DatabaseSummary:
     avg_table_recall_at_3: float = 0.0
     avg_table_recall_at_5: float = 0.0
     avg_table_recall_at_10: float = 0.0
+    avg_table_recall_at_k: float = 0.0
+    avg_column_recall_at_3: float = 0.0
+    avg_column_recall_at_5: float = 0.0
+    avg_column_recall_at_k: float = 0.0
+
+    avg_table_precision_at_1: float = 0.0
+    avg_table_precision_at_3: float = 0.0
+    avg_table_precision_at_5: float = 0.0
+    avg_table_precision_at_k: float = 0.0
+    avg_table_f1_at_1: float = 0.0
+    avg_table_f1_at_3: float = 0.0
+    avg_table_f1_at_5: float = 0.0
+    avg_table_f1_at_k: float = 0.0
+
+    avg_column_precision_at_1: float = 0.0
+    avg_column_precision_at_3: float = 0.0
+    avg_column_precision_at_5: float = 0.0
+    avg_column_precision_at_k: float = 0.0
+    avg_column_f1_at_1: float = 0.0
+    avg_column_f1_at_3: float = 0.0
+    avg_column_f1_at_5: float = 0.0
+    avg_column_f1_at_k: float = 0.0
     avg_table_mrr: float = 0.0
     table_exact_match_rate: float = 0.0
     avg_table_jaccard: float = 0.0
@@ -587,7 +643,9 @@ class OracleManager:
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
                          cols_per_obj: int = 3, use_parallel: bool = False,
-                         hints: Optional[str] = None) -> Tuple[Optional[List[DiscoveredObject]], float]:
+                         hints: Optional[str] = None, n: Optional[int] = None,
+                         m: Optional[int] = None, alpha: float = 0.65,
+                         parallel_alpha: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
         """
         Call developer.discover_objects() and return results.
 
@@ -598,6 +656,10 @@ class OracleManager:
             cols_per_obj: Max columns per object
             use_parallel: If True, call developer.discover_objects_parallel()
             hints: Optional hints string used by parallel discovery
+            n: Optional topN for stage-2 (sequential discover_objects p_n)
+            m: Optional topN for column search (parallel discover_objects_parallel p_m)
+            alpha: Weight for sequential rerank
+            parallel_alpha: Weight for parallel rerank
 
         Returns:
             Tuple of (list of discovered objects, execution time in ms)
@@ -619,9 +681,9 @@ class OracleManager:
                     query,          # p_query
                     hints,          # p_hints
                     k,              # p_k
-                    None,           # p_m (default)
+                    m,              # p_m
                     cols_per_obj,   # p_cols_per_obj
-                    0.60,           # p_alpha (default)
+                    parallel_alpha, # p_alpha
                     result_json     # p_result_json (OUT)
                 ])
             else:
@@ -629,9 +691,9 @@ class OracleManager:
                     query,      # p_query
                     k,          # p_k
                     k0,         # p_k0
-                    None,       # p_n (default)
+                    n,          # p_n
                     cols_per_obj,  # p_cols_per_obj
-                    0.65,       # p_alpha (default)
+                    alpha,      # p_alpha
                     result_json # p_result_json (OUT)
                 ])
 
@@ -839,6 +901,20 @@ def calculate_recall_at_k(expected: Set[str], discovered: List[str], k: int) -> 
     return found / len(expected_lower)
 
 
+def calculate_precision_recall_f1_at_k(expected: Set[str], discovered: List[str], k: int) -> Tuple[float, float, float]:
+    """Calculate Precision@k, Recall@k, and F1@k using ordered discovered list."""
+    expected_lower = {e.lower() for e in expected}
+    if not expected_lower:
+        return 0.0, 0.0, 0.0
+
+    top_k_lower = {d.lower() for d in discovered[:k]}
+    tp = len(expected_lower & top_k_lower)
+    precision = tp / len(top_k_lower) if top_k_lower else 0.0
+    recall = tp / len(expected_lower)
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    return precision, recall, f1
+
+
 def calculate_mrr(expected: Set[str], discovered: List[str]) -> float:
     """
     Calculate Mean Reciprocal Rank.
@@ -1024,7 +1100,8 @@ def calculate_topn_accuracy(
 
 
 def evaluate_result(expected_tables: List[ExpectedObject],
-                   discovered: List[DiscoveredObject]) -> Dict:
+                   discovered: List[DiscoveredObject],
+                   eval_k: int = 10) -> Dict:
     """
     Evaluate discovered objects against expected.
 
@@ -1044,9 +1121,16 @@ def evaluate_result(expected_tables: List[ExpectedObject],
     # Extract discovered table names and columns
     discovered_table_names = [d.object_name for d in discovered]
     discovered_column_names = set()
+    discovered_column_ordered = []
+    seen_cols = set()
     for d in discovered:
         for col in d.columns:
-            discovered_column_names.add(col['name'])
+            col_name = col['name']
+            discovered_column_names.add(col_name)
+            c_lower = col_name.lower()
+            if c_lower not in seen_cols:
+                seen_cols.add(c_lower)
+                discovered_column_ordered.append(col_name)
 
     # Basic metrics (Precision, Recall, F1)
     table_p, table_r, table_f1 = calculate_precision_recall_f1(
@@ -1066,6 +1150,17 @@ def evaluate_result(expected_tables: List[ExpectedObject],
     recall_at_3 = calculate_recall_at_k(expected_table_names, discovered_table_names, 3)
     recall_at_5 = calculate_recall_at_k(expected_table_names, discovered_table_names, 5)
     recall_at_10 = calculate_recall_at_k(expected_table_names, discovered_table_names, 10)
+    recall_at_k = calculate_recall_at_k(expected_table_names, discovered_table_names, eval_k)
+
+    table_p_at_1, _, table_f1_at_1 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 1)
+    table_p_at_3, _, table_f1_at_3 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 3)
+    table_p_at_5, _, table_f1_at_5 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 5)
+    table_p_at_k, _, table_f1_at_k = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, eval_k)
+
+    col_p_at_1, col_r_at_1, col_f1_at_1 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 1)
+    col_p_at_3, col_r_at_3, col_f1_at_3 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 3)
+    col_p_at_5, col_r_at_5, col_f1_at_5 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 5)
+    col_p_at_k, col_r_at_k, col_f1_at_k = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, eval_k)
 
     # MRR (ranking quality)
     mrr = calculate_mrr(expected_table_names, discovered_table_names)
@@ -1120,6 +1215,28 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         'recall_at_3': recall_at_3,
         'recall_at_5': recall_at_5,
         'recall_at_10': recall_at_10,
+        'recall_at_k': recall_at_k,
+
+        'table_precision_at_1': table_p_at_1,
+        'table_precision_at_3': table_p_at_3,
+        'table_precision_at_5': table_p_at_5,
+        'table_precision_at_k': table_p_at_k,
+        'table_f1_at_1': table_f1_at_1,
+        'table_f1_at_3': table_f1_at_3,
+        'table_f1_at_5': table_f1_at_5,
+        'table_f1_at_k': table_f1_at_k,
+
+        'column_recall_at_3': col_r_at_3,
+        'column_recall_at_5': col_r_at_5,
+        'column_recall_at_k': col_r_at_k,
+        'column_precision_at_1': col_p_at_1,
+        'column_precision_at_3': col_p_at_3,
+        'column_precision_at_5': col_p_at_5,
+        'column_precision_at_k': col_p_at_k,
+        'column_f1_at_1': col_f1_at_1,
+        'column_f1_at_3': col_f1_at_3,
+        'column_f1_at_5': col_f1_at_5,
+        'column_f1_at_k': col_f1_at_k,
 
         # Advanced metrics
         'mrr': mrr,
@@ -1214,6 +1331,12 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
         'table_hit_at_1', 'table_hit_at_3', 'table_hit_at_5',
         # Recall@k (fraction - better for multi-table)
         'table_recall_at_3', 'table_recall_at_5', 'table_recall_at_10',
+        'table_recall_at_k',
+        'column_recall_at_3', 'column_recall_at_5', 'column_recall_at_k',
+        'table_precision_at_1', 'table_precision_at_3', 'table_precision_at_5', 'table_precision_at_k',
+        'table_f1_at_1', 'table_f1_at_3', 'table_f1_at_5', 'table_f1_at_k',
+        'column_precision_at_1', 'column_precision_at_3', 'column_precision_at_5', 'column_precision_at_k',
+        'column_f1_at_1', 'column_f1_at_3', 'column_f1_at_5', 'column_f1_at_k',
         # Advanced metrics
         'table_mrr', 'table_jaccard', 'table_exact_match',
         # Joint table-column metrics
@@ -1254,6 +1377,26 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
                 'table_recall_at_3': f"{result.table_recall_at_3:.4f}",
                 'table_recall_at_5': f"{result.table_recall_at_5:.4f}",
                 'table_recall_at_10': f"{result.table_recall_at_10:.4f}",
+                'table_recall_at_k': f"{result.table_recall_at_k:.4f}",
+                'column_recall_at_3': f"{result.column_recall_at_3:.4f}",
+                'column_recall_at_5': f"{result.column_recall_at_5:.4f}",
+                'column_recall_at_k': f"{result.column_recall_at_k:.4f}",
+                'table_precision_at_1': f"{result.table_precision_at_1:.4f}",
+                'table_precision_at_3': f"{result.table_precision_at_3:.4f}",
+                'table_precision_at_5': f"{result.table_precision_at_5:.4f}",
+                'table_precision_at_k': f"{result.table_precision_at_k:.4f}",
+                'table_f1_at_1': f"{result.table_f1_at_1:.4f}",
+                'table_f1_at_3': f"{result.table_f1_at_3:.4f}",
+                'table_f1_at_5': f"{result.table_f1_at_5:.4f}",
+                'table_f1_at_k': f"{result.table_f1_at_k:.4f}",
+                'column_precision_at_1': f"{result.column_precision_at_1:.4f}",
+                'column_precision_at_3': f"{result.column_precision_at_3:.4f}",
+                'column_precision_at_5': f"{result.column_precision_at_5:.4f}",
+                'column_precision_at_k': f"{result.column_precision_at_k:.4f}",
+                'column_f1_at_1': f"{result.column_f1_at_1:.4f}",
+                'column_f1_at_3': f"{result.column_f1_at_3:.4f}",
+                'column_f1_at_5': f"{result.column_f1_at_5:.4f}",
+                'column_f1_at_k': f"{result.column_f1_at_k:.4f}",
                 # Advanced metrics
                 'table_mrr': f"{result.table_mrr:.4f}",
                 'table_jaccard': f"{result.table_jaccard:.4f}",
@@ -1284,6 +1427,12 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
         'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate',
         # Recall@k averages (fraction - better for multi-table)
         'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10',
+        'avg_table_recall_at_k',
+        'avg_column_recall_at_3', 'avg_column_recall_at_5', 'avg_column_recall_at_k',
+        'avg_table_precision_at_1', 'avg_table_precision_at_3', 'avg_table_precision_at_5', 'avg_table_precision_at_k',
+        'avg_table_f1_at_1', 'avg_table_f1_at_3', 'avg_table_f1_at_5', 'avg_table_f1_at_k',
+        'avg_column_precision_at_1', 'avg_column_precision_at_3', 'avg_column_precision_at_5', 'avg_column_precision_at_k',
+        'avg_column_f1_at_1', 'avg_column_f1_at_3', 'avg_column_f1_at_5', 'avg_column_f1_at_k',
         # Advanced metrics
         'avg_table_mrr', 'avg_table_jaccard', 'table_exact_match_rate',
         # Joint table-column metrics
@@ -1318,6 +1467,26 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
                 'avg_table_recall_at_3': f"{summary.avg_table_recall_at_3:.4f}",
                 'avg_table_recall_at_5': f"{summary.avg_table_recall_at_5:.4f}",
                 'avg_table_recall_at_10': f"{summary.avg_table_recall_at_10:.4f}",
+                'avg_table_recall_at_k': f"{summary.avg_table_recall_at_k:.4f}",
+                'avg_column_recall_at_3': f"{summary.avg_column_recall_at_3:.4f}",
+                'avg_column_recall_at_5': f"{summary.avg_column_recall_at_5:.4f}",
+                'avg_column_recall_at_k': f"{summary.avg_column_recall_at_k:.4f}",
+                'avg_table_precision_at_1': f"{summary.avg_table_precision_at_1:.4f}",
+                'avg_table_precision_at_3': f"{summary.avg_table_precision_at_3:.4f}",
+                'avg_table_precision_at_5': f"{summary.avg_table_precision_at_5:.4f}",
+                'avg_table_precision_at_k': f"{summary.avg_table_precision_at_k:.4f}",
+                'avg_table_f1_at_1': f"{summary.avg_table_f1_at_1:.4f}",
+                'avg_table_f1_at_3': f"{summary.avg_table_f1_at_3:.4f}",
+                'avg_table_f1_at_5': f"{summary.avg_table_f1_at_5:.4f}",
+                'avg_table_f1_at_k': f"{summary.avg_table_f1_at_k:.4f}",
+                'avg_column_precision_at_1': f"{summary.avg_column_precision_at_1:.4f}",
+                'avg_column_precision_at_3': f"{summary.avg_column_precision_at_3:.4f}",
+                'avg_column_precision_at_5': f"{summary.avg_column_precision_at_5:.4f}",
+                'avg_column_precision_at_k': f"{summary.avg_column_precision_at_k:.4f}",
+                'avg_column_f1_at_1': f"{summary.avg_column_f1_at_1:.4f}",
+                'avg_column_f1_at_3': f"{summary.avg_column_f1_at_3:.4f}",
+                'avg_column_f1_at_5': f"{summary.avg_column_f1_at_5:.4f}",
+                'avg_column_f1_at_k': f"{summary.avg_column_f1_at_k:.4f}",
                 # Advanced metrics
                 'avg_table_mrr': f"{summary.avg_table_mrr:.4f}",
                 'avg_table_jaccard': f"{summary.avg_table_jaccard:.4f}",
@@ -1496,6 +1665,28 @@ def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSu
         summary.avg_table_recall_at_3 = sum(r.table_recall_at_3 for r in successful) / n
         summary.avg_table_recall_at_5 = sum(r.table_recall_at_5 for r in successful) / n
         summary.avg_table_recall_at_10 = sum(r.table_recall_at_10 for r in successful) / n
+        summary.avg_table_recall_at_k = sum(r.table_recall_at_k for r in successful) / n
+        summary.avg_column_recall_at_3 = sum(r.column_recall_at_3 for r in successful) / n
+        summary.avg_column_recall_at_5 = sum(r.column_recall_at_5 for r in successful) / n
+        summary.avg_column_recall_at_k = sum(r.column_recall_at_k for r in successful) / n
+
+        summary.avg_table_precision_at_1 = sum(r.table_precision_at_1 for r in successful) / n
+        summary.avg_table_precision_at_3 = sum(r.table_precision_at_3 for r in successful) / n
+        summary.avg_table_precision_at_5 = sum(r.table_precision_at_5 for r in successful) / n
+        summary.avg_table_precision_at_k = sum(r.table_precision_at_k for r in successful) / n
+        summary.avg_table_f1_at_1 = sum(r.table_f1_at_1 for r in successful) / n
+        summary.avg_table_f1_at_3 = sum(r.table_f1_at_3 for r in successful) / n
+        summary.avg_table_f1_at_5 = sum(r.table_f1_at_5 for r in successful) / n
+        summary.avg_table_f1_at_k = sum(r.table_f1_at_k for r in successful) / n
+
+        summary.avg_column_precision_at_1 = sum(r.column_precision_at_1 for r in successful) / n
+        summary.avg_column_precision_at_3 = sum(r.column_precision_at_3 for r in successful) / n
+        summary.avg_column_precision_at_5 = sum(r.column_precision_at_5 for r in successful) / n
+        summary.avg_column_precision_at_k = sum(r.column_precision_at_k for r in successful) / n
+        summary.avg_column_f1_at_1 = sum(r.column_f1_at_1 for r in successful) / n
+        summary.avg_column_f1_at_3 = sum(r.column_f1_at_3 for r in successful) / n
+        summary.avg_column_f1_at_5 = sum(r.column_f1_at_5 for r in successful) / n
+        summary.avg_column_f1_at_k = sum(r.column_f1_at_k for r in successful) / n
 
         # Advanced metrics
         summary.avg_table_mrr = sum(r.table_mrr for r in successful) / n
@@ -1556,6 +1747,28 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{s.avg_column_precision:.4f}</td>"
             f"<td>{s.avg_column_recall:.4f}</td>"
             f"<td>{s.avg_column_f1:.4f}</td>"
+            f"<td>{s.avg_table_recall_at_3:.4f}</td>"
+            f"<td>{s.avg_table_recall_at_5:.4f}</td>"
+            f"<td>{s.avg_table_recall_at_k:.4f}</td>"
+            f"<td>{s.avg_column_recall_at_3:.4f}</td>"
+            f"<td>{s.avg_column_recall_at_5:.4f}</td>"
+            f"<td>{s.avg_column_recall_at_k:.4f}</td>"
+            f"<td>{s.avg_table_precision_at_1:.4f}</td>"
+            f"<td>{s.avg_table_precision_at_3:.4f}</td>"
+            f"<td>{s.avg_table_precision_at_5:.4f}</td>"
+            f"<td>{s.avg_table_precision_at_k:.4f}</td>"
+            f"<td>{s.avg_table_f1_at_1:.4f}</td>"
+            f"<td>{s.avg_table_f1_at_3:.4f}</td>"
+            f"<td>{s.avg_table_f1_at_5:.4f}</td>"
+            f"<td>{s.avg_table_f1_at_k:.4f}</td>"
+            f"<td>{s.avg_column_precision_at_1:.4f}</td>"
+            f"<td>{s.avg_column_precision_at_3:.4f}</td>"
+            f"<td>{s.avg_column_precision_at_5:.4f}</td>"
+            f"<td>{s.avg_column_precision_at_k:.4f}</td>"
+            f"<td>{s.avg_column_f1_at_1:.4f}</td>"
+            f"<td>{s.avg_column_f1_at_3:.4f}</td>"
+            f"<td>{s.avg_column_f1_at_5:.4f}</td>"
+            f"<td>{s.avg_column_f1_at_k:.4f}</td>"
             f"<td>{s.table_hit_at_1_rate:.2%}</td>"
             f"<td>{s.table_hit_at_3_rate:.2%}</td>"
             f"<td>{s.table_hit_at_5_rate:.2%}</td>"
@@ -1601,6 +1814,28 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{r.column_precision:.4f}</td>"
             f"<td>{r.column_recall:.4f}</td>"
             f"<td>{r.column_f1:.4f}</td>"
+            f"<td>{r.table_recall_at_3:.4f}</td>"
+            f"<td>{r.table_recall_at_5:.4f}</td>"
+            f"<td>{r.table_recall_at_k:.4f}</td>"
+            f"<td>{r.column_recall_at_3:.4f}</td>"
+            f"<td>{r.column_recall_at_5:.4f}</td>"
+            f"<td>{r.column_recall_at_k:.4f}</td>"
+            f"<td>{r.table_precision_at_1:.4f}</td>"
+            f"<td>{r.table_precision_at_3:.4f}</td>"
+            f"<td>{r.table_precision_at_5:.4f}</td>"
+            f"<td>{r.table_precision_at_k:.4f}</td>"
+            f"<td>{r.table_f1_at_1:.4f}</td>"
+            f"<td>{r.table_f1_at_3:.4f}</td>"
+            f"<td>{r.table_f1_at_5:.4f}</td>"
+            f"<td>{r.table_f1_at_k:.4f}</td>"
+            f"<td>{r.column_precision_at_1:.4f}</td>"
+            f"<td>{r.column_precision_at_3:.4f}</td>"
+            f"<td>{r.column_precision_at_5:.4f}</td>"
+            f"<td>{r.column_precision_at_k:.4f}</td>"
+            f"<td>{r.column_f1_at_1:.4f}</td>"
+            f"<td>{r.column_f1_at_3:.4f}</td>"
+            f"<td>{r.column_f1_at_5:.4f}</td>"
+            f"<td>{r.column_f1_at_k:.4f}</td>"
             f"<td>{'Y' if r.table_hit_at_1 else 'N'}</td>"
             f"<td>{'Y' if r.table_hit_at_3 else 'N'}</td>"
             f"<td>{'Y' if r.table_hit_at_5 else 'N'}</td>"
@@ -1749,6 +1984,12 @@ def generate_results_html(results: List[EvaluationResult],
         <th>Avg Time (ms)</th>
         <th>Table P</th><th>Table R</th><th>Table F1</th>
         <th>Col P</th><th>Col R</th><th>Col F1</th>
+        <th>Tbl R@3</th><th>Tbl R@5</th><th>Tbl R@K</th>
+        <th>Col R@3</th><th>Col R@5</th><th>Col R@K</th>
+        <th>Tbl P@1</th><th>Tbl P@3</th><th>Tbl P@5</th><th>Tbl P@K</th>
+        <th>Tbl F1@1</th><th>Tbl F1@3</th><th>Tbl F1@5</th><th>Tbl F1@K</th>
+        <th>Col P@1</th><th>Col P@3</th><th>Col P@5</th><th>Col P@K</th>
+        <th>Col F1@1</th><th>Col F1@3</th><th>Col F1@5</th><th>Col F1@K</th>
         <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th>
         <th>MRR</th><th>Jaccard</th><th>Exact Match</th><th>Joint Col F1</th>
         <th>Top-N Tbl</th><th>Top-N Col</th>
@@ -1777,6 +2018,12 @@ def generate_results_html(results: List[EvaluationResult],
         <th>Expected Tables</th><th>Discovered Tables</th>
         <th>Table P</th><th>Table R</th><th>Table F1</th>
         <th>Col P</th><th>Col R</th><th>Col F1</th>
+        <th>Tbl R@3</th><th>Tbl R@5</th><th>Tbl R@K</th>
+        <th>Col R@3</th><th>Col R@5</th><th>Col R@K</th>
+        <th>Tbl P@1</th><th>Tbl P@3</th><th>Tbl P@5</th><th>Tbl P@K</th>
+        <th>Tbl F1@1</th><th>Tbl F1@3</th><th>Tbl F1@5</th><th>Tbl F1@K</th>
+        <th>Col P@1</th><th>Col P@3</th><th>Col P@5</th><th>Col P@K</th>
+        <th>Col F1@1</th><th>Col F1@3</th><th>Col F1@5</th><th>Col F1@K</th>
         <th>Hit@1</th><th>Hit@3</th><th>Hit@5</th><th>MRR</th>
         <th>Top-N Tbl</th><th>Top-N Col</th>
         <th>Error</th>
@@ -2018,7 +2265,8 @@ def start_results_server(html_content: str, port: int = 8787):
 def process_database(oracle_mgr: OracleManager, db_id: str,
                     ddl_folder: str, questions: List[Dict],
                     index_script: str,
-                    use_parallel_discovery: bool = False) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
+                    use_parallel_discovery: bool = False,
+                    discover_cfg: Optional[DiscoveryConfig] = None) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
     """
     Process a single database: create user, run DDL, evaluate queries.
 
@@ -2080,7 +2328,11 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
 
     # Step 6: Process questions
     results, summary = evaluate_questions_for_db(
-        oracle_mgr, db_id, questions, use_parallel_discovery=use_parallel_discovery
+        oracle_mgr,
+        db_id,
+        questions,
+        use_parallel_discovery=use_parallel_discovery,
+        discover_cfg=discover_cfg
     )
 
     # Step 7: Drop user
@@ -2091,11 +2343,14 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
 
 def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                               questions: List[Dict],
-                              use_parallel_discovery: bool = False) -> Tuple[List[EvaluationResult], DatabaseSummary]:
+                              use_parallel_discovery: bool = False,
+                              discover_cfg: Optional[DiscoveryConfig] = None) -> Tuple[List[EvaluationResult], DatabaseSummary]:
     """Evaluate all questions for one db_id using the current connected user."""
     results = []
 
     print(f"\n  Processing {len(questions)} questions for {db_id}...")
+
+    cfg = discover_cfg or DiscoveryConfig()
 
     for i, question in enumerate(questions):
         question_id = question.get('question_id', i)
@@ -2132,11 +2387,15 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
         try:
             discovered, exec_time = oracle_mgr.discover_objects(
                 query=question_text + " " + evidence,
-                k=10,
-                k0=50,
-                cols_per_obj=5,
+                k=cfg.k,
+                k0=cfg.k0,
+                cols_per_obj=cfg.cols_per_obj,
                 use_parallel=use_parallel_discovery,
-                hints=evidence if use_parallel_discovery else None
+                hints=evidence if use_parallel_discovery else None,
+                n=cfg.n,
+                m=cfg.m,
+                alpha=cfg.alpha,
+                parallel_alpha=cfg.parallel_alpha
             )
 
             result.execution_time_ms = exec_time
@@ -2150,7 +2409,7 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                 ])
 
                 # Evaluate results
-                metrics = evaluate_result(expected_objs, discovered)
+                metrics = evaluate_result(expected_objs, discovered, eval_k=cfg.k)
 
                 # Basic results
                 result.discovered_tables = metrics['discovered_tables']
@@ -2173,6 +2432,28 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                 result.table_recall_at_3 = metrics['recall_at_3']
                 result.table_recall_at_5 = metrics['recall_at_5']
                 result.table_recall_at_10 = metrics['recall_at_10']
+                result.table_recall_at_k = metrics['recall_at_k']
+
+                result.table_precision_at_1 = metrics['table_precision_at_1']
+                result.table_precision_at_3 = metrics['table_precision_at_3']
+                result.table_precision_at_5 = metrics['table_precision_at_5']
+                result.table_precision_at_k = metrics['table_precision_at_k']
+                result.table_f1_at_1 = metrics['table_f1_at_1']
+                result.table_f1_at_3 = metrics['table_f1_at_3']
+                result.table_f1_at_5 = metrics['table_f1_at_5']
+                result.table_f1_at_k = metrics['table_f1_at_k']
+
+                result.column_recall_at_3 = metrics['column_recall_at_3']
+                result.column_recall_at_5 = metrics['column_recall_at_5']
+                result.column_recall_at_k = metrics['column_recall_at_k']
+                result.column_precision_at_1 = metrics['column_precision_at_1']
+                result.column_precision_at_3 = metrics['column_precision_at_3']
+                result.column_precision_at_5 = metrics['column_precision_at_5']
+                result.column_precision_at_k = metrics['column_precision_at_k']
+                result.column_f1_at_1 = metrics['column_f1_at_1']
+                result.column_f1_at_3 = metrics['column_f1_at_3']
+                result.column_f1_at_5 = metrics['column_f1_at_5']
+                result.column_f1_at_k = metrics['column_f1_at_k']
 
                 # Advanced metrics
                 result.table_mrr = metrics['mrr']
@@ -2221,6 +2502,7 @@ def process_databases_single_user(
     max_questions: Optional[int],
     username: str,
     use_parallel_discovery: bool,
+    discover_cfg: Optional[DiscoveryConfig],
 ) -> Tuple[List[EvaluationResult], List[DatabaseSummary], float]:
     """Load all schemas into one user and evaluate all queries in that shared schema."""
     all_results: List[EvaluationResult] = []
@@ -2289,13 +2571,42 @@ def process_databases_single_user(
             oracle_mgr,
             db_id,
             questions,
-            use_parallel_discovery=use_parallel_discovery
+            use_parallel_discovery=use_parallel_discovery,
+            discover_cfg=discover_cfg
         )
         all_results.extend(results)
         all_summaries.append(summary)
 
     oracle_mgr.drop_user(username)
     return all_results, all_summaries, index_setup_time_ms
+
+
+def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
+    """Build discovery config from defaults + optional JSON blob + explicit CLI overrides."""
+    cfg = DiscoveryConfig()
+
+    if args.discover_config_json:
+        raw = json.loads(args.discover_config_json)
+        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha']:
+            if key in raw:
+                setattr(cfg, key, raw[key])
+
+    if args.discover_k is not None:
+        cfg.k = args.discover_k
+    if args.discover_k0 is not None:
+        cfg.k0 = args.discover_k0
+    if args.discover_n is not None:
+        cfg.n = args.discover_n
+    if args.discover_m is not None:
+        cfg.m = args.discover_m
+    if args.discover_cols_per_obj is not None:
+        cfg.cols_per_obj = args.discover_cols_per_obj
+    if args.discover_alpha is not None:
+        cfg.alpha = args.discover_alpha
+    if args.discover_parallel_alpha is not None:
+        cfg.parallel_alpha = args.discover_parallel_alpha
+
+    return cfg
 
 
 def main():
@@ -2394,6 +2705,20 @@ def main():
         help='Use developer.discover_objects_parallel() instead of discover_objects()'
     )
 
+    discover_group = parser.add_argument_group('Discovery settings')
+    discover_group.add_argument(
+        '--discover-config-json',
+        default=None,
+        help='JSON blob for discovery args, e.g. {"k":10,"k0":50,"cols_per_obj":5,"alpha":0.65,"parallel_alpha":0.6}'
+    )
+    discover_group.add_argument('--discover-k', type=int, default=None, help='Top K output objects (overrides config JSON)')
+    discover_group.add_argument('--discover-k0', type=int, default=None, help='Sequential stage-1 object topN')
+    discover_group.add_argument('--discover-n', type=int, default=None, help='Sequential stage-2 column topN (p_n)')
+    discover_group.add_argument('--discover-m', type=int, default=None, help='Parallel column topN (p_m)')
+    discover_group.add_argument('--discover-cols-per-obj', type=int, default=None, help='Columns attached per object')
+    discover_group.add_argument('--discover-alpha', type=float, default=None, help='Sequential score blend alpha')
+    discover_group.add_argument('--discover-parallel-alpha', type=float, default=None, help='Parallel score blend alpha')
+
     args = parser.parse_args()
 
     # Apply test mode defaults
@@ -2452,6 +2777,11 @@ def main():
 
     output_source = args.output_source
     html_content = ""
+    try:
+        discover_cfg = build_discovery_config(args)
+    except json.JSONDecodeError as e:
+        print(f"Error: invalid --discover-config-json: {e}")
+        return 1
 
     try:
         all_results = []
@@ -2467,6 +2797,7 @@ def main():
                 max_questions=args.max_questions,
                 username=args.single_user_name,
                 use_parallel_discovery=args.parallel_discovery,
+                discover_cfg=discover_cfg,
             )
         else:
             for db_id in sorted(ddl_folders):
@@ -2483,7 +2814,8 @@ def main():
 
                 results, summary, index_setup_time_ms = process_database(
                     oracle_mgr, db_id, ddl_folder, questions, args.index_script,
-                    use_parallel_discovery=args.parallel_discovery
+                    use_parallel_discovery=args.parallel_discovery,
+                    discover_cfg=discover_cfg
                 )
 
                 all_results.extend(results)
@@ -2507,9 +2839,13 @@ def main():
             'max_questions': args.max_questions or 'all',
             'max_databases': args.max_databases or 'all',
             'output_source': output_source,
-            'discover_k': 10,
-            'discover_k0': 50,
-            'discover_cols_per_obj': 5,
+            'discover_k': discover_cfg.k,
+            'discover_k0': discover_cfg.k0,
+            'discover_n': discover_cfg.n,
+            'discover_m': discover_cfg.m,
+            'discover_cols_per_obj': discover_cfg.cols_per_obj,
+            'discover_alpha': discover_cfg.alpha,
+            'discover_parallel_alpha': discover_cfg.parallel_alpha,
             'index_setup_time_ms': f'{total_index_setup_time_ms:.2f}',
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',

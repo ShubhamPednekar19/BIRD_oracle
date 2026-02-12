@@ -173,3 +173,19 @@ Options:
 
 - Python 3.6+
 - No external dependencies (uses only standard library)
+
+
+## Hybrid Search Evaluation
+
+Use `run_hybrid_search_evaluation.py` for Oracle hybrid discovery benchmarking with sequential or parallel discovery modes.
+
+Example with parallel mode and grouped discovery config:
+
+```bash
+python run_hybrid_search_evaluation.py \
+  --connection-string "sys/password@localhost:1521/FREEPDB1" \
+  --parallel-discovery \
+  --discover-config-json '{"k":10,"m":80,"cols_per_obj":5,"parallel_alpha":0.60}'
+```
+
+The generated HTML/CSV reports include additional @K metrics (Recall, Precision, F1) for both table and column evaluation.
