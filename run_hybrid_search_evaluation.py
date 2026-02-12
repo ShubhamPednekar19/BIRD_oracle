@@ -586,7 +586,8 @@ class OracleManager:
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
-                         cols_per_obj: int = 3) -> Tuple[Optional[List[DiscoveredObject]], float]:
+                         cols_per_obj: int = 3, use_parallel: bool = False,
+                         hints: Optional[str] = None) -> Tuple[Optional[List[DiscoveredObject]], float]:
         """
         Call developer.discover_objects() and return results.
 
@@ -595,6 +596,8 @@ class OracleManager:
             k: Final number of objects to return
             k0: Stage-1 candidate objects
             cols_per_obj: Max columns per object
+            use_parallel: If True, call developer.discover_objects_parallel()
+            hints: Optional hints string used by parallel discovery
 
         Returns:
             Tuple of (list of discovered objects, execution time in ms)
@@ -611,15 +614,26 @@ class OracleManager:
             start_time = time.perf_counter()
 
             # Call the procedure
-            cursor.callproc('developer.discover_objects', [
-                query,      # p_query
-                k,          # p_k
-                k0,         # p_k0
-                None,       # p_n (default)
-                cols_per_obj,  # p_cols_per_obj
-                0.65,       # p_alpha (default)
-                result_json # p_result_json (OUT)
-            ])
+            if use_parallel:
+                cursor.callproc('developer.discover_objects_parallel', [
+                    query,          # p_query
+                    hints,          # p_hints
+                    k,              # p_k
+                    None,           # p_m (default)
+                    cols_per_obj,   # p_cols_per_obj
+                    0.60,           # p_alpha (default)
+                    result_json     # p_result_json (OUT)
+                ])
+            else:
+                cursor.callproc('developer.discover_objects', [
+                    query,      # p_query
+                    k,          # p_k
+                    k0,         # p_k0
+                    None,       # p_n (default)
+                    cols_per_obj,  # p_cols_per_obj
+                    0.65,       # p_alpha (default)
+                    result_json # p_result_json (OUT)
+                ])
 
             end_time = time.perf_counter()
             execution_time_ms = (end_time - start_time) * 1000
@@ -640,8 +654,11 @@ class OracleManager:
                         schema=item.get('schema', ''),
                         score=item.get('score', 0.0),
                         columns=[
-                            {'name': c.get('name', ''), 'datatype': c.get('datatype', '')}
-                            for c in item.get('column', [])
+                            {
+                                'name': c.get('name', ''),
+                                'datatype': c.get('datatype', c.get('dataType', ''))
+                            }
+                            for c in item.get('column', item.get('columns', []))
                         ]
                     )
                     discovered.append(obj)
@@ -2000,7 +2017,8 @@ def start_results_server(html_content: str, port: int = 8787):
 
 def process_database(oracle_mgr: OracleManager, db_id: str,
                     ddl_folder: str, questions: List[Dict],
-                    index_script: str) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
+                    index_script: str,
+                    use_parallel_discovery: bool = False) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
     """
     Process a single database: create user, run DDL, evaluate queries.
 
@@ -2061,7 +2079,9 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     print(f"  Index setup time: {index_setup_time_ms:.2f}ms")
 
     # Step 6: Process questions
-    results, summary = evaluate_questions_for_db(oracle_mgr, db_id, questions)
+    results, summary = evaluate_questions_for_db(
+        oracle_mgr, db_id, questions, use_parallel_discovery=use_parallel_discovery
+    )
 
     # Step 7: Drop user
     oracle_mgr.drop_user(db_id)
@@ -2070,7 +2090,8 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
 
 
 def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
-                              questions: List[Dict]) -> Tuple[List[EvaluationResult], DatabaseSummary]:
+                              questions: List[Dict],
+                              use_parallel_discovery: bool = False) -> Tuple[List[EvaluationResult], DatabaseSummary]:
     """Evaluate all questions for one db_id using the current connected user."""
     results = []
 
@@ -2113,7 +2134,9 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                 query=question_text + " " + evidence,
                 k=10,
                 k0=50,
-                cols_per_obj=5
+                cols_per_obj=5,
+                use_parallel=use_parallel_discovery,
+                hints=evidence if use_parallel_discovery else None
             )
 
             result.execution_time_ms = exec_time
@@ -2197,6 +2220,7 @@ def process_databases_single_user(
     index_script: str,
     max_questions: Optional[int],
     username: str,
+    use_parallel_discovery: bool,
 ) -> Tuple[List[EvaluationResult], List[DatabaseSummary], float]:
     """Load all schemas into one user and evaluate all queries in that shared schema."""
     all_results: List[EvaluationResult] = []
@@ -2261,7 +2285,12 @@ def process_databases_single_user(
         if max_questions is not None:
             questions = questions[:max_questions]
 
-        results, summary = evaluate_questions_for_db(oracle_mgr, db_id, questions)
+        results, summary = evaluate_questions_for_db(
+            oracle_mgr,
+            db_id,
+            questions,
+            use_parallel_discovery=use_parallel_discovery
+        )
         all_results.extend(results)
         all_summaries.append(summary)
 
@@ -2359,6 +2388,11 @@ def main():
         default='BIRD_ALL',
         help='Username to use with --single-user-mode (default: BIRD_ALL)'
     )
+    parser.add_argument(
+        '--parallel-discovery',
+        action='store_true',
+        help='Use developer.discover_objects_parallel() instead of discover_objects()'
+    )
 
     args = parser.parse_args()
 
@@ -2432,6 +2466,7 @@ def main():
                 index_script=args.index_script,
                 max_questions=args.max_questions,
                 username=args.single_user_name,
+                use_parallel_discovery=args.parallel_discovery,
             )
         else:
             for db_id in sorted(ddl_folders):
@@ -2447,7 +2482,8 @@ def main():
                     questions = questions[:args.max_questions]
 
                 results, summary, index_setup_time_ms = process_database(
-                    oracle_mgr, db_id, ddl_folder, questions, args.index_script
+                    oracle_mgr, db_id, ddl_folder, questions, args.index_script,
+                    use_parallel_discovery=args.parallel_discovery
                 )
 
                 all_results.extend(results)
@@ -2477,6 +2513,7 @@ def main():
             'index_setup_time_ms': f'{total_index_setup_time_ms:.2f}',
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
+            'parallel_discovery': args.parallel_discovery,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
 
