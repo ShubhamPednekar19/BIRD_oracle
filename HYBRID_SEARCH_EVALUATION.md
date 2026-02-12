@@ -180,6 +180,24 @@ Then open `http://localhost:8000/report.html` in your browser.
 | `--port` | | 8000 | Port for the local HTTP server |
 | `--single-user-mode` | | false | Load all selected schemas into one Oracle user and run all queries there |
 | `--single-user-name` | | `BIRD_ALL` | Username for `--single-user-mode` (password is the same as username) |
+| `--parallel-discovery` | | false | Use `developer.discover_objects_parallel()` instead of sequential discover |
+
+### Discovery Argument Group
+
+You can now provide discovery procedure arguments as a grouped JSON config and/or explicit overrides.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--discover-config-json` | none | JSON blob for discovery args. Example: `{"k":10,"k0":50,"n":null,"m":null,"cols_per_obj":5,"alpha":0.65,"parallel_alpha":0.60}` |
+| `--discover-k` | 10 | Final top-K objects returned and metric cutoff K |
+| `--discover-k0` | 50 | Sequential stage-1 object topN (`p_k0`) |
+| `--discover-n` | null | Sequential stage-2 column topN (`p_n`) |
+| `--discover-m` | null | Parallel column topN (`p_m`) |
+| `--discover-cols-per-obj` | 5 | Max columns attached per object |
+| `--discover-alpha` | 0.65 | Sequential rerank blend alpha (`p_alpha`) |
+| `--discover-parallel-alpha` | 0.60 | Parallel rerank blend alpha (`p_alpha`) |
+
+Override precedence: explicit CLI flags > `--discover-config-json` > built-in defaults.
 
 ## Output Files
 
@@ -508,3 +526,14 @@ Overall Hit@1 rate: 55.00%
 ## License
 
 Part of the BIRD Oracle benchmark evaluation project.
+
+
+## Additional @K Metrics (Table + Column)
+
+The evaluator now reports these ranked-cutoff metrics in **results CSV**, **summary CSV**, and the **HTML dashboard**:
+
+- Recall@3, Recall@5, Recall@K
+- Precision@1, Precision@3, Precision@5, Precision@K
+- F1@1, F1@3, F1@5, F1@K
+
+These are emitted for both table and column signals, and database-level averages are included in summary output.
