@@ -173,6 +173,35 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_alpha         IN  NUMBER      DEFAULT 0.65,
     p_result_json   OUT JSON
   );
+
+-------------------------------------------------------------------------------
+-- DISCOVER_OBJECTS_PARALLEL: NL metadata discovery using parallel hybrid search.
+--
+-- STRATEGY:
+--   1) Run hybrid object search on ALL_OBJECTS_SEARCH_TEXT (top p_k)
+--   2) Run hybrid column search on ALL_COLS_SEARCH_TEXT (top p_m, default p_k*5)
+--   3) Group column hits by object_id and retain per-column scores
+--   4) Normalize object/column scores and rerank merged candidates
+--   5) Output top p_k objects as JSON array
+--
+-- PARAMETERS:
+--   p_query          - Natural language query text (CLOB)
+--   p_hints          - Optional text hints (object/schema regex text query)
+--   p_k              - Top-N final objects
+--   p_m              - Column hit budget, must be > p_k (default p_k*5)
+--   p_cols_per_obj   - Max columns attached per object in output
+--   p_alpha          - Weight object evidence vs column evidence
+--   p_result_json    - OUT JSON result array
+-------------------------------------------------------------------------------
+  PROCEDURE discover_objects_parallel(
+    p_query         IN  CLOB,
+    p_hints         IN  CLOB DEFAULT NULL,
+    p_k             IN  PLS_INTEGER DEFAULT 10,
+    p_m             IN  PLS_INTEGER DEFAULT NULL,
+    p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
+    p_alpha         IN  NUMBER      DEFAULT 0.60,
+    p_result_json   OUT JSON
+  );
 END developer;
 /
 
@@ -475,6 +504,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     l_counts t_count_tab;
     l_best   t_best_tab;
 
+    -- Keeps blended/normalized scores in [0,1] range for stable reranking/output
     FUNCTION clamp01(p_x NUMBER) RETURN NUMBER IS
     BEGIN
       IF p_x < 0 THEN RETURN 0; END IF;
@@ -600,6 +630,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       l_cols(l_cols.COUNT).data_type     := r.data_type;
       l_cols(l_cols.COUNT).col_score_raw := r.col_score_raw;
 
+      -- Track min/max raw column scores to later normalize col_score_raw into [0,1].
       IF l_min_col IS NULL OR r.col_score_raw < l_min_col THEN l_min_col := r.col_score_raw; END IF;
       IF l_max_col IS NULL OR r.col_score_raw > l_max_col THEN l_max_col := r.col_score_raw; END IF;
     END LOOP;
@@ -730,6 +761,331 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     END;
 
   END discover_objects;
+
+  /* ======================================================================== */
+  /* DISCOVER_OBJECTS_PARALLEL                                                */
+  /* ======================================================================== */
+  PROCEDURE discover_objects_parallel(
+    p_query         IN  CLOB,
+    p_hints         IN  CLOB DEFAULT NULL,
+    p_k             IN  PLS_INTEGER DEFAULT 10,
+    p_m             IN  PLS_INTEGER DEFAULT NULL,
+    p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
+    p_alpha         IN  NUMBER      DEFAULT 0.60,
+    p_result_json   OUT JSON
+  ) IS
+    c_obj_index CONSTANT VARCHAR2(128) := 'DISCOVERY_INDEX';
+    c_col_index CONSTANT VARCHAR2(128) := 'COL_DISCOVERY_HVIX';
+
+    l_k PLS_INTEGER := GREATEST(1, NVL(p_k, 10));
+    l_m PLS_INTEGER := GREATEST(l_k + 1, NVL(p_m, l_k * 5));
+
+    l_obj_res CLOB;
+    l_col_res CLOB;
+
+    l_min_obj NUMBER := NULL;
+    l_max_obj NUMBER := NULL;
+    l_min_col NUMBER := NULL;
+    l_max_col NUMBER := NULL;
+
+    TYPE t_obj_rec IS RECORD (
+      object_id     NUMBER,
+      object_name   VARCHAR2(128),
+      owner         VARCHAR2(128),
+      object_type   VARCHAR2(23),
+      obj_score_raw NUMBER,
+      obj_norm      NUMBER,
+      col_support   NUMBER,
+      final_score   NUMBER
+    );
+    TYPE t_obj_tab IS TABLE OF t_obj_rec;
+    l_objs t_obj_tab := t_obj_tab();
+
+    TYPE t_col_rec IS RECORD (
+      object_id     NUMBER,
+      column_name   VARCHAR2(128),
+      data_type     VARCHAR2(128),
+      col_score_raw NUMBER,
+      col_norm      NUMBER
+    );
+    TYPE t_col_tab IS TABLE OF t_col_rec;
+    l_cols t_col_tab := t_col_tab();
+
+    TYPE t_objid_to_idx IS TABLE OF PLS_INTEGER INDEX BY VARCHAR2(64);
+    l_obj_map t_objid_to_idx;
+
+    TYPE t_top_cols  IS TABLE OF t_col_rec INDEX BY PLS_INTEGER;
+    TYPE t_count_tab IS TABLE OF PLS_INTEGER INDEX BY PLS_INTEGER;
+    TYPE t_best_tab  IS TABLE OF t_top_cols INDEX BY PLS_INTEGER;
+    l_counts t_count_tab;
+    l_best   t_best_tab;
+
+    -- Keep normalized/blended scores bounded in [0,1] for stable ranking
+    FUNCTION clamp01(p_x NUMBER) RETURN NUMBER IS
+    BEGIN
+      IF p_x < 0 THEN RETURN 0; END IF;
+      IF p_x > 1 THEN RETURN 1; END IF;
+      RETURN p_x;
+    END;
+  BEGIN
+    p_result_json := JSON('[]');
+    IF p_query IS NULL OR DBMS_LOB.getlength(p_query) = 0 THEN
+      RETURN;
+    END IF;
+
+    /* ---- Stage 1: object hybrid search ---- */
+    DECLARE
+      req         JSON_OBJECT_T := JSON_OBJECT_T();
+      ret_obj     JSON_OBJECT_T := JSON_OBJECT_T();
+      return_vals JSON_ARRAY_T  := JSON_ARRAY_T();
+    BEGIN
+      return_vals.append('rowid');
+      return_vals.append('score');
+      return_vals.append('vector_score');
+      return_vals.append('chunk_text');
+      return_vals.append('chunk_id');
+
+      ret_obj.put('values', return_vals);
+      ret_obj.put('topN', l_k);
+
+      req.put('hybrid_index_name', c_obj_index);
+      req.put('search_text', p_query);
+      IF p_hints IS NOT NULL AND DBMS_LOB.getlength(p_hints) > 0 THEN
+        req.put('contains', p_hints);
+      END IF;
+      req.put('return', ret_obj);
+
+      l_obj_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
+    END;
+
+    FOR r IN (
+      SELECT
+        o.object_id,
+        o.object_name,
+        o.owner,
+        o.object_type,
+        jt.score AS obj_score_raw
+      FROM JSON_TABLE(
+             l_obj_res,
+             '$[*]'
+             COLUMNS (
+               rowid_txt VARCHAR2(200) PATH '$.rowid',
+               score     NUMBER        PATH '$.score'
+             )
+           ) jt
+      JOIN all_objects_search_text o
+        ON o.rowid = CHARTOROWID(jt.rowid_txt)
+    ) LOOP
+      l_objs.EXTEND;
+      l_objs(l_objs.COUNT).object_id     := r.object_id;
+      l_objs(l_objs.COUNT).object_name   := r.object_name;
+      l_objs(l_objs.COUNT).owner         := r.owner;
+      l_objs(l_objs.COUNT).object_type   := r.object_type;
+      l_objs(l_objs.COUNT).obj_score_raw := r.obj_score_raw;
+      l_obj_map(TO_CHAR(r.object_id)) := l_objs.COUNT;
+
+      IF l_min_obj IS NULL OR r.obj_score_raw < l_min_obj THEN l_min_obj := r.obj_score_raw; END IF;
+      IF l_max_obj IS NULL OR r.obj_score_raw > l_max_obj THEN l_max_obj := r.obj_score_raw; END IF;
+    END LOOP;
+
+    /* ---- Stage 2: column hybrid search ---- */
+    DECLARE
+      req         JSON_OBJECT_T := JSON_OBJECT_T();
+      ret_obj     JSON_OBJECT_T := JSON_OBJECT_T();
+      return_vals JSON_ARRAY_T  := JSON_ARRAY_T();
+    BEGIN
+      return_vals.append('rowid');
+      return_vals.append('score');
+      return_vals.append('vector_score');
+      return_vals.append('chunk_text');
+      return_vals.append('chunk_id');
+
+      ret_obj.put('values', return_vals);
+      ret_obj.put('topN', l_m);
+
+      req.put('hybrid_index_name', c_col_index);
+      req.put('search_text', p_query);
+      IF p_hints IS NOT NULL AND DBMS_LOB.getlength(p_hints) > 0 THEN
+        req.put('contains', p_hints);
+      END IF;
+      req.put('return', ret_obj);
+
+      l_col_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
+    END;
+
+    FOR r IN (
+      SELECT
+        c.object_id,
+        c.column_name,
+        c.data_type,
+        jt.score AS col_score_raw
+      FROM JSON_TABLE(
+             l_col_res,
+             '$[*]'
+             COLUMNS (
+               rowid_txt VARCHAR2(200) PATH '$.rowid',
+               score     NUMBER        PATH '$.score'
+             )
+           ) jt
+      JOIN all_cols_search_text c
+        ON c.rowid = CHARTOROWID(jt.rowid_txt)
+    ) LOOP
+      l_cols.EXTEND;
+      l_cols(l_cols.COUNT).object_id     := r.object_id;
+      l_cols(l_cols.COUNT).column_name   := r.column_name;
+      l_cols(l_cols.COUNT).data_type     := r.data_type;
+      l_cols(l_cols.COUNT).col_score_raw := r.col_score_raw;
+
+      -- Track min/max raw column scores so we can normalize each hit later.
+      IF l_min_col IS NULL OR r.col_score_raw < l_min_col THEN l_min_col := r.col_score_raw; END IF;
+      IF l_max_col IS NULL OR r.col_score_raw > l_max_col THEN l_max_col := r.col_score_raw; END IF;
+    END LOOP;
+
+    IF l_objs.COUNT = 0 AND l_cols.COUNT = 0 THEN
+      RETURN;
+    END IF;
+
+    IF l_cols.COUNT > 0 THEN
+      FOR i IN 1 .. l_cols.COUNT LOOP
+        IF NOT l_obj_map.EXISTS(TO_CHAR(l_cols(i).object_id)) THEN
+          l_objs.EXTEND;
+          SELECT object_id, object_name, owner, object_type
+            INTO l_objs(l_objs.COUNT).object_id,
+                 l_objs(l_objs.COUNT).object_name,
+                 l_objs(l_objs.COUNT).owner,
+                 l_objs(l_objs.COUNT).object_type
+            FROM all_objects_search_text
+           WHERE object_id = l_cols(i).object_id;
+
+          l_objs(l_objs.COUNT).obj_score_raw := l_min_obj;
+          l_obj_map(TO_CHAR(l_cols(i).object_id)) := l_objs.COUNT;
+        END IF;
+      END LOOP;
+    END IF;
+
+    FOR i IN 1 .. l_objs.COUNT LOOP
+      l_objs(i).obj_norm :=
+        CASE
+          WHEN l_min_obj IS NULL OR l_max_obj IS NULL OR l_max_obj = l_min_obj THEN 1
+          ELSE (l_objs(i).obj_score_raw - l_min_obj) / (l_max_obj - l_min_obj)
+        END;
+      l_objs(i).obj_norm := clamp01(l_objs(i).obj_norm);
+      l_counts(i) := 0;
+    END LOOP;
+
+    IF l_cols.COUNT > 0 THEN
+      FOR i IN 1 .. l_cols.COUNT LOOP
+        l_cols(i).col_norm :=
+          CASE
+            WHEN l_min_col IS NULL OR l_max_col IS NULL OR l_max_col = l_min_col THEN 1
+            ELSE (l_cols(i).col_score_raw - l_min_col) / (l_max_col - l_min_col)
+          END;
+        l_cols(i).col_norm := clamp01(l_cols(i).col_norm);
+      END LOOP;
+    END IF;
+
+    FOR i IN 1 .. l_cols.COUNT LOOP
+      DECLARE
+        obj_idx PLS_INTEGER;
+        tmp     t_col_rec;
+        j       PLS_INTEGER;
+      BEGIN
+        obj_idx := l_obj_map(TO_CHAR(l_cols(i).object_id));
+        IF obj_idx IS NULL THEN CONTINUE; END IF;
+
+        tmp := l_cols(i);
+        IF l_counts(obj_idx) < p_cols_per_obj THEN
+          l_counts(obj_idx) := l_counts(obj_idx) + 1;
+          l_best(obj_idx)(l_counts(obj_idx)) := tmp;
+        ELSE
+          IF tmp.col_norm > l_best(obj_idx)(l_counts(obj_idx)).col_norm THEN
+            l_best(obj_idx)(l_counts(obj_idx)) := tmp;
+          ELSE
+            CONTINUE;
+          END IF;
+        END IF;
+
+        FOR j IN REVERSE 2 .. l_counts(obj_idx) LOOP
+          IF l_best(obj_idx)(j).col_norm > l_best(obj_idx)(j-1).col_norm THEN
+            tmp := l_best(obj_idx)(j-1);
+            l_best(obj_idx)(j-1) := l_best(obj_idx)(j);
+            l_best(obj_idx)(j) := tmp;
+          END IF;
+        END LOOP;
+      END;
+    END LOOP;
+
+    FOR i IN 1 .. l_objs.COUNT LOOP
+      IF l_counts(i) IS NULL OR l_counts(i) = 0 THEN
+        l_objs(i).col_support := 0;
+      ELSE
+        DECLARE
+          s NUMBER := 0;
+          m PLS_INTEGER := l_counts(i);
+        BEGIN
+          FOR j IN 1 .. m LOOP
+            s := s + l_best(i)(j).col_norm;
+          END LOOP;
+          l_objs(i).col_support := s / m;
+        END;
+      END IF;
+
+      l_objs(i).final_score :=
+        clamp01(p_alpha * l_objs(i).obj_norm + (1 - p_alpha) * l_objs(i).col_support);
+    END LOOP;
+
+    DECLARE
+      TYPE t_used_tab IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
+      l_used t_used_tab;
+      out_arr JSON_ARRAY_T := JSON_ARRAY_T();
+      best_i  PLS_INTEGER;
+      best_s  NUMBER;
+    BEGIN
+      FOR pick IN 1 .. LEAST(l_k, l_objs.COUNT) LOOP
+        best_i := NULL;
+        best_s := -1;
+
+        FOR i IN 1 .. l_objs.COUNT LOOP
+          IF l_used.EXISTS(i) AND l_used(i) THEN CONTINUE; END IF;
+          IF l_objs(i).final_score > best_s THEN
+            best_s := l_objs(i).final_score;
+            best_i := i;
+          END IF;
+        END LOOP;
+
+        EXIT WHEN best_i IS NULL;
+        l_used(best_i) := TRUE;
+
+        DECLARE
+          o JSON_OBJECT_T := JSON_OBJECT_T();
+          cols JSON_ARRAY_T := JSON_ARRAY_T();
+        BEGIN
+          o.put('objectName', l_objs(best_i).object_name);
+          o.put('objectType', l_objs(best_i).object_type);
+          o.put('schema',     l_objs(best_i).owner);
+          o.put('score',      ROUND(l_objs(best_i).final_score, 6));
+
+          IF l_counts(best_i) IS NOT NULL AND l_counts(best_i) > 0 THEN
+            FOR j IN 1 .. l_counts(best_i) LOOP
+              DECLARE
+                c JSON_OBJECT_T := JSON_OBJECT_T();
+              BEGIN
+                c.put('name',     l_best(best_i)(j).column_name);
+                c.put('dataType', l_best(best_i)(j).data_type);
+                c.put('score',    ROUND(l_best(best_i)(j).col_norm, 6));
+                cols.append(c);
+              END;
+            END LOOP;
+            o.put('columns', cols);
+          END IF;
+
+          out_arr.append(o);
+        END;
+      END LOOP;
+
+      p_result_json := out_arr.to_json;
+    END;
+  END discover_objects_parallel;
 
 END developer;
 /
