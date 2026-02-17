@@ -106,6 +106,7 @@ class DiscoveryConfig:
     cols_per_obj: int = 5
     alpha: float = 0.65
     parallel_alpha: float = 0.60
+    unified_score_threshold: float = 0.60
 
 
 @dataclass
@@ -642,10 +643,11 @@ class OracleManager:
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
-                         cols_per_obj: int = 3, use_parallel: bool = False,
+                         cols_per_obj: int = 3, discovery_mode: str = 'sequential',
                          hints: Optional[str] = None, n: Optional[int] = None,
                          m: Optional[int] = None, alpha: float = 0.65,
-                         parallel_alpha: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
+                         parallel_alpha: float = 0.60,
+                         unified_score_threshold: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
         """
         Call developer.discover_objects() and return results.
 
@@ -654,12 +656,13 @@ class OracleManager:
             k: Final number of objects to return
             k0: Stage-1 candidate objects
             cols_per_obj: Max columns per object
-            use_parallel: If True, call developer.discover_objects_parallel()
+            discovery_mode: One of sequential, parallel, unified
             hints: Optional hints string used by parallel discovery
             n: Optional topN for stage-2 (sequential discover_objects p_n)
             m: Optional topN for column search (parallel discover_objects_parallel p_m)
             alpha: Weight for sequential rerank
             parallel_alpha: Weight for parallel rerank
+            unified_score_threshold: Score threshold for unified discovery
 
         Returns:
             Tuple of (list of discovered objects, execution time in ms)
@@ -676,7 +679,7 @@ class OracleManager:
             start_time = time.perf_counter()
 
             # Call the procedure
-            if use_parallel:
+            if discovery_mode == 'parallel':
                 cursor.callproc('developer.discover_objects_parallel', [
                     query,          # p_query
                     hints,          # p_hints
@@ -685,6 +688,15 @@ class OracleManager:
                     cols_per_obj,   # p_cols_per_obj
                     parallel_alpha, # p_alpha
                     result_json     # p_result_json (OUT)
+                ])
+            elif discovery_mode == 'unified':
+                cursor.callproc('developer.discover_objects_unified', [
+                    query,                   # p_query
+                    k,                       # p_k
+                    n,                       # p_n
+                    cols_per_obj,            # p_cols_per_obj
+                    unified_score_threshold, # p_score_threshold
+                    result_json              # p_result_json (OUT)
                 ])
             else:
                 cursor.callproc('developer.discover_objects', [
@@ -730,6 +742,19 @@ class OracleManager:
         except Exception as e:
             print(f"Error in discover_objects: {e}")
             return None, 0.0
+
+    def infer_objects_unified(self, query: str, k: int = 10, n: Optional[int] = None,
+                              cols_per_obj: int = 5,
+                              score_threshold: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
+        """Infer objects using developer.discover_objects_unified()."""
+        return self.discover_objects(
+            query=query,
+            k=k,
+            n=n,
+            cols_per_obj=cols_per_obj,
+            discovery_mode='unified',
+            unified_score_threshold=score_threshold
+        )
 
     def drop_user(self, username: str) -> bool:
         """
@@ -2265,7 +2290,7 @@ def start_results_server(html_content: str, port: int = 8787):
 def process_database(oracle_mgr: OracleManager, db_id: str,
                     ddl_folder: str, questions: List[Dict],
                     index_script: str,
-                    use_parallel_discovery: bool = False,
+                    discovery_mode: str = 'sequential',
                     discover_cfg: Optional[DiscoveryConfig] = None) -> Tuple[List[EvaluationResult], DatabaseSummary, float]:
     """
     Process a single database: create user, run DDL, evaluate queries.
@@ -2331,7 +2356,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         oracle_mgr,
         db_id,
         questions,
-        use_parallel_discovery=use_parallel_discovery,
+        discovery_mode=discovery_mode,
         discover_cfg=discover_cfg
     )
 
@@ -2343,7 +2368,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
 
 def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                               questions: List[Dict],
-                              use_parallel_discovery: bool = False,
+                              discovery_mode: str = 'sequential',
                               discover_cfg: Optional[DiscoveryConfig] = None) -> Tuple[List[EvaluationResult], DatabaseSummary]:
     """Evaluate all questions for one db_id using the current connected user."""
     results = []
@@ -2385,18 +2410,28 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
 
         # Call discover_objects
         try:
-            discovered, exec_time = oracle_mgr.discover_objects(
-                query=question_text + " " + evidence,
-                k=cfg.k,
-                k0=cfg.k0,
-                cols_per_obj=cfg.cols_per_obj,
-                use_parallel=use_parallel_discovery,
-                hints=evidence if use_parallel_discovery else None,
-                n=cfg.n,
-                m=cfg.m,
-                alpha=cfg.alpha,
-                parallel_alpha=cfg.parallel_alpha
-            )
+            if discovery_mode == 'unified':
+                discovered, exec_time = oracle_mgr.infer_objects_unified(
+                    query=question_text + " " + evidence,
+                    k=cfg.k,
+                    n=cfg.n,
+                    cols_per_obj=cfg.cols_per_obj,
+                    score_threshold=cfg.unified_score_threshold,
+                )
+            else:
+                discovered, exec_time = oracle_mgr.discover_objects(
+                    query=question_text + " " + evidence,
+                    k=cfg.k,
+                    k0=cfg.k0,
+                    cols_per_obj=cfg.cols_per_obj,
+                    discovery_mode=discovery_mode,
+                    hints=evidence if discovery_mode == 'parallel' else None,
+                    n=cfg.n,
+                    m=cfg.m,
+                    alpha=cfg.alpha,
+                    parallel_alpha=cfg.parallel_alpha,
+                    unified_score_threshold=cfg.unified_score_threshold,
+                )
 
             result.execution_time_ms = exec_time
 
@@ -2501,7 +2536,7 @@ def process_databases_single_user(
     index_script: str,
     max_questions: Optional[int],
     username: str,
-    use_parallel_discovery: bool,
+    discovery_mode: str,
     discover_cfg: Optional[DiscoveryConfig],
 ) -> Tuple[List[EvaluationResult], List[DatabaseSummary], float]:
     """Load all schemas into one user and evaluate all queries in that shared schema."""
@@ -2571,7 +2606,7 @@ def process_databases_single_user(
             oracle_mgr,
             db_id,
             questions,
-            use_parallel_discovery=use_parallel_discovery,
+            discovery_mode=discovery_mode,
             discover_cfg=discover_cfg
         )
         all_results.extend(results)
@@ -2587,7 +2622,7 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
 
     if args.discover_config_json:
         raw = json.loads(args.discover_config_json)
-        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha']:
+        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha', 'unified_score_threshold']:
             if key in raw:
                 setattr(cfg, key, raw[key])
 
@@ -2605,6 +2640,8 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
         cfg.alpha = args.discover_alpha
     if args.discover_parallel_alpha is not None:
         cfg.parallel_alpha = args.discover_parallel_alpha
+    if args.discover_unified_score_threshold is not None:
+        cfg.unified_score_threshold = args.discover_unified_score_threshold
 
     return cfg
 
@@ -2700,9 +2737,10 @@ def main():
         help='Username to use with --single-user-mode (default: BIRD_ALL)'
     )
     parser.add_argument(
-        '--parallel-discovery',
-        action='store_true',
-        help='Use developer.discover_objects_parallel() instead of discover_objects()'
+        '--mode',
+        choices=['sequential', 'parallel', 'unified'],
+        default='sequential',
+        help='Discovery mode: sequential, parallel, or unified (default: sequential)'
     )
 
     discover_group = parser.add_argument_group('Discovery settings')
@@ -2718,6 +2756,7 @@ def main():
     discover_group.add_argument('--discover-cols-per-obj', type=int, default=None, help='Columns attached per object')
     discover_group.add_argument('--discover-alpha', type=float, default=None, help='Sequential score blend alpha')
     discover_group.add_argument('--discover-parallel-alpha', type=float, default=None, help='Parallel score blend alpha')
+    discover_group.add_argument('--discover-unified-score-threshold', type=float, default=None, help='Unified mode score threshold [0,1]')
 
     args = parser.parse_args()
 
@@ -2796,7 +2835,7 @@ def main():
                 index_script=args.index_script,
                 max_questions=args.max_questions,
                 username=args.single_user_name,
-                use_parallel_discovery=args.parallel_discovery,
+                discovery_mode=args.mode,
                 discover_cfg=discover_cfg,
             )
         else:
@@ -2814,7 +2853,7 @@ def main():
 
                 results, summary, index_setup_time_ms = process_database(
                     oracle_mgr, db_id, ddl_folder, questions, args.index_script,
-                    use_parallel_discovery=args.parallel_discovery,
+                    discovery_mode=args.mode,
                     discover_cfg=discover_cfg
                 )
 
@@ -2846,10 +2885,11 @@ def main():
             'discover_cols_per_obj': discover_cfg.cols_per_obj,
             'discover_alpha': discover_cfg.alpha,
             'discover_parallel_alpha': discover_cfg.parallel_alpha,
+            'discover_unified_score_threshold': discover_cfg.unified_score_threshold,
             'index_setup_time_ms': f'{total_index_setup_time_ms:.2f}',
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
-            'parallel_discovery': args.parallel_discovery,
+            'mode': args.mode,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
 

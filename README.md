@@ -310,7 +310,7 @@ Example with parallel mode and grouped discovery config:
 ```bash
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
-  --parallel-discovery \
+  --mode parallel \
   --discover-config-json '{"k":10,"m":80,"cols_per_obj":5,"parallel_alpha":0.60}'
 ```
 
