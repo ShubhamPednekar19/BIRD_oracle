@@ -245,7 +245,7 @@ python add_dev_questions_metadata.py \
 Notes:
 
 - Default Groq-compatible base URL is `https://api.groq.com/openai/v1`.
-- Groq uses the same OpenAI-compatible Chat Completions schema, so it shares the same batched extractor path as `openai_compat`/`openrouter`.
+- Groq provider uses the Groq Python SDK (`Groq(...).chat.completions.create(...)`) with batched prompts.
 - You can change endpoint with `--llm-base-url` if needed.
 - For OpenAI-compatible providers (`openai_compat`, `openrouter`, `groq`), questions are sent in batches (default 35 per request) instead of one-by-one.
 
@@ -297,7 +297,7 @@ Notes:
 
 Optional dependencies:
 
-- No additional Python dependency required for LLM providers (uses standard-library HTTP requests).
+- `groq` Python package if you use `--method llm --llm-provider groq`
 - Ollama runtime only if you use `--method llm --llm-provider ollama`
 
 

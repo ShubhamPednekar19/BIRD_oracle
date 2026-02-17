@@ -30,6 +30,11 @@ from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 from urllib import request, error
 
+try:
+    from groq import Groq
+except ImportError:  # Optional dependency for --llm-provider groq
+    Groq = None
+
 # SQL keywords to exclude from columns
 SQL_KEYWORDS = {
     'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'LIKE', 'IS', 'NULL',
@@ -554,16 +559,8 @@ def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
     return cleaned
 
 
-def extract_tables_with_columns_llm_chat_completions_batch(
-    sql_items: List[Tuple[int, str]],
-    model: str,
-    api_key: Optional[str],
-    base_url: Optional[str],
-    extra_headers: Optional[Dict[str, str]] = None,
-) -> Dict[int, List[Dict]]:
-    """Extract tables/columns for multiple SQL queries via chat-completions-compatible APIs (OpenAI/OpenRouter/Groq)."""
-    endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
-
+def _build_batched_sql_prompt(sql_items: List[Tuple[int, str]]) -> Tuple[str, str]:
+    """Build system/user prompts for batched SQL extraction."""
     instructions = (
         "You extract table and column metadata from SQL queries. "
         "Return strict JSON only with this schema: "
@@ -577,12 +574,64 @@ def extract_tables_with_columns_llm_chat_completions_batch(
         lines.append(f"Index {idx}:")
         lines.append(sql)
         lines.append("---")
+    return instructions, "\n".join(lines)
 
+
+
+def extract_tables_with_columns_llm_groq_batch(
+    sql_items: List[Tuple[int, str]],
+    model: str,
+    api_key: str,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via the Groq Python SDK."""
+    if Groq is None:
+        raise RuntimeError("groq package is not installed; install it or use --llm-provider openrouter/openai_compat")
+
+    instructions, user_prompt = _build_batched_sql_prompt(sql_items)
+    client = Groq(api_key=api_key)
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+    )
+
+    try:
+        content = completion.choices[0].message.content
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise RuntimeError("Unexpected Groq response shape") from exc
+
+    parsed = _extract_json_object(content)
+    items = parsed.get("items", [])
+    result: Dict[int, List[Dict]] = {}
+    for item in items:
+        try:
+            idx = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    return result
+
+
+
+def extract_tables_with_columns_llm_chat_completions_batch(
+    sql_items: List[Tuple[int, str]],
+    model: str,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via HTTP chat-completions-compatible APIs (OpenAI/OpenRouter)."""
+    endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
+
+    instructions, user_prompt = _build_batched_sql_prompt(sql_items)
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": instructions},
-            {"role": "user", "content": "\n".join(lines)},
+            {"role": "user", "content": user_prompt},
         ],
         "temperature": 0,
     }
@@ -726,13 +775,20 @@ def process_dev_file(
                     for idx in range(batch_start, batch_end)
                 ]
                 try:
-                    batch_result = extract_tables_with_columns_llm_chat_completions_batch(
-                        sql_items,
-                        model=llm_model,
-                        api_key=effective_api_key,
-                        base_url=effective_base_url,
-                        extra_headers=extra_headers or None,
-                    )
+                    if llm_provider == "groq":
+                        batch_result = extract_tables_with_columns_llm_groq_batch(
+                            sql_items,
+                            model=llm_model,
+                            api_key=effective_api_key,
+                        )
+                    else:
+                        batch_result = extract_tables_with_columns_llm_chat_completions_batch(
+                            sql_items,
+                            model=llm_model,
+                            api_key=effective_api_key,
+                            base_url=effective_base_url,
+                            extra_headers=extra_headers or None,
+                        )
                 except Exception as exc:
                     print(
                         f"Warning: LLM batch extraction failed for indexes {batch_start}-{batch_end - 1} ({exc}); "
