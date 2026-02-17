@@ -63,6 +63,13 @@ SQL_KEYWORDS = {
     'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10',
     'T11', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17', 'T18', 'T19', 'T20'
 }
+# Keywords that may legitimately appear as unquoted column names in BIRD schemas
+# and should not be dropped during heuristic extraction.
+NON_FILTERABLE_IDENTIFIER_KEYWORDS = {
+    'POWER',
+}
+
+
 
 # Oracle reserved words that need to be quoted
 ORACLE_RESERVED_WORDS = {
@@ -486,25 +493,25 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
                     # Assign to first table as default
                     table_columns[tables[0]].add(col)
 
-    # Extract unqualified identifiers from SELECT list for single-table queries.
-    # This catches cases like CASE WHEN borderColor = ... and COUNT(id).
+    # For single-table queries, recover identifiers across the full SQL expression.
+    # This captures columns used in SELECT/WHERE/ORDER BY (e.g., DISTINCT availability,
+    # power LIKE ..., promoTypes = ..., COUNT(id), etc.).
     if len(tables) == 1:
-        select_match = re.search(r'\bSELECT\b(.*?)\bFROM\b', sql_normalized, re.IGNORECASE)
-        if select_match:
-            select_clause = select_match.group(1)
-            # Remove quoted string literals to avoid treating them as identifiers
-            select_clause = re.sub(r"'[^']*'|\"[^\"]*\"", " ", select_clause)
-            tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', select_clause)
-            for token in tokens:
-                upper_token = token.upper()
-                if upper_token in SQL_KEYWORDS:
-                    continue
-                if token in tables or upper_token in alias_to_table:
-                    continue
-                # Skip function names (identifier followed by opening parenthesis)
-                if re.search(rf'\b{re.escape(token)}\s*\(', select_clause):
-                    continue
-                table_columns[tables[0]].add(token)
+        single_table = tables[0]
+        scrubbed_sql = re.sub(r"'[^']*'|\"[^\"]*\"", " ", sql_normalized)
+        tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', scrubbed_sql)
+        for token in tokens:
+            upper_token = token.upper()
+            if upper_token in SQL_KEYWORDS and upper_token not in NON_FILTERABLE_IDENTIFIER_KEYWORDS:
+                continue
+            if token == single_table or upper_token == single_table.upper():
+                continue
+            if upper_token in alias_to_table:
+                continue
+            # Skip function names (identifier followed by opening parenthesis)
+            if re.search(rf'\b{re.escape(token)}\s*\(', scrubbed_sql):
+                continue
+            table_columns[single_table].add(token)
 
     return table_columns
 
@@ -533,7 +540,7 @@ def extract_tables_with_columns(sql: str) -> List[Dict]:
         # Filter out any remaining keywords
         filtered_columns = [
             col for col in sorted(columns)
-            if col.upper() not in SQL_KEYWORDS
+            if (col.upper() not in SQL_KEYWORDS or col.upper() in NON_FILTERABLE_IDENTIFIER_KEYWORDS)
             and not col.isdigit()
             and len(col) > 0
         ]
