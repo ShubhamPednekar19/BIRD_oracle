@@ -245,6 +245,7 @@ python add_dev_questions_metadata.py \
 Notes:
 
 - Default Groq-compatible base URL is `https://api.groq.com/openai/v1`.
+- Groq uses the same OpenAI-compatible Chat Completions schema, so it shares the same batched extractor path as `openai_compat`/`openrouter`.
 - You can change endpoint with `--llm-base-url` if needed.
 - For OpenAI-compatible providers (`openai_compat`, `openrouter`, `groq`), questions are sent in batches (default 35 per request) instead of one-by-one.
 

@@ -554,14 +554,14 @@ def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
     return cleaned
 
 
-def extract_tables_with_columns_llm_openai_compat_batch(
+def extract_tables_with_columns_llm_chat_completions_batch(
     sql_items: List[Tuple[int, str]],
     model: str,
     api_key: Optional[str],
     base_url: Optional[str],
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> Dict[int, List[Dict]]:
-    """Extract tables/columns for multiple SQL queries via OpenAI-compatible chat completions API."""
+    """Extract tables/columns for multiple SQL queries via chat-completions-compatible APIs (OpenAI/OpenRouter/Groq)."""
     endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
 
     instructions = (
@@ -726,7 +726,7 @@ def process_dev_file(
                     for idx in range(batch_start, batch_end)
                 ]
                 try:
-                    batch_result = extract_tables_with_columns_llm_openai_compat_batch(
+                    batch_result = extract_tables_with_columns_llm_chat_completions_batch(
                         sql_items,
                         model=llm_model,
                         api_key=effective_api_key,
