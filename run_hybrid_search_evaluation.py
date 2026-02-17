@@ -504,7 +504,8 @@ class OracleManager:
 
     def execute_index_creation(self, script_path: str) -> bool:
         """
-        Execute the index creation script (PL/SQL package).
+        Execute the index creation script (PL/SQL package) and print SQL*Plus-like
+        diagnostics (incl. SHOW ERRORS) when something compiles INVALID.
 
         Args:
             script_path: Path to index_creation.sql
@@ -517,6 +518,64 @@ class OracleManager:
             print(f"  Warning: Index creation script not found: {script_path}")
             print(f"  Skipping hybrid search setup - will be added later")
             return True  # Return True to continue processing
+
+        def _print_db_error(e: Exception, context_sql: str | None = None):
+            """Print Oracle error code/message/offset + the SQL that failed."""
+            if isinstance(e, oracledb.DatabaseError):
+                err, = e.args
+                print("\n---- ORACLE ERROR ----")
+                print("Code   :", getattr(err, "code", None))
+                print("Message:", getattr(err, "message", str(e)))
+                print("Offset :", getattr(err, "offset", None))
+                if context_sql:
+                    print("---- SQL (failed) ----")
+                    # Don't spam the terminal with huge scripts; show last chunk too
+                    snippet = context_sql.strip()
+                    if len(snippet) > 4000:
+                        print("... (truncated) ...")
+                        print(snippet[-4000:])
+                    else:
+                        print(snippet)
+                print("----------------------\n")
+            else:
+                print(f"\n---- ERROR ----\n{e}\n-------------\n")
+
+        def _extract_object_name(block: str) -> tuple[str | None, str | None]:
+            """
+            Try to extract (object_type, object_name) from CREATE OR REPLACE statements.
+            Returns (type, name) or (None, None).
+            """
+            m = re.search(
+                r'CREATE\s+OR\s+REPLACE\s+'
+                r'(PACKAGE\s+BODY|PACKAGE|PROCEDURE|FUNCTION|TRIGGER)\s+("?[\w$#]+"?)',
+                block,
+                flags=re.IGNORECASE
+            )
+            if not m:
+                return None, None
+            obj_type = m.group(1).upper().replace("  ", " ").strip()
+            obj_name = m.group(2).strip().strip('"').upper()
+            return obj_type, obj_name
+
+        def _show_errors(cursor, obj_name: str):
+            """
+            SQL*Plus SHOW ERRORS equivalent: query USER_ERRORS for this object.
+            """
+            cursor.execute(
+                """
+                SELECT type, line, position, text
+                FROM user_errors
+                WHERE name = :name
+                ORDER BY sequence
+                """,
+                name=obj_name.upper()
+            )
+            rows = cursor.fetchall()
+            if rows:
+                print(f"\n---- COMPILATION ERRORS for {obj_name} ----")
+                for typ, line, pos, text in rows:
+                    print(f"{typ:<12} Line {line:>4}, Col {pos:>3}: {text}")
+                print("------------------------------------------\n")
 
         try:
             with open(script_path, 'r', encoding='utf-8') as f:
@@ -536,17 +595,22 @@ class OracleManager:
             sql_content = re.sub(r'(?m)^\s*WHENEVER\s+SQLERROR\s+.*$', '', sql_content)
             sql_content = re.sub(r'(?m)^\s*SHOW\s+ERRORS\s*$', '', sql_content)
 
-            # Split PL/SQL content by '/' delimiter (standard for PL/SQL scripts)
-            # Each block (package spec, package body) is typically separated by '/'
-            blocks = sql_content.split('\n/\n')
+            # Normalize newlines so delimiter splitting is reliable
+            sql_content = sql_content.replace('\r\n', '\n').replace('\r', '\n')
 
-            plsql_keywords = ['CREATE OR REPLACE PACKAGE',
-                              'CREATE OR REPLACE PACKAGE BODY',
-                              'CREATE OR REPLACE PROCEDURE',
-                              'CREATE OR REPLACE FUNCTION',
-                              'BEGIN', 'DECLARE']
+            # Split by SQL*Plus '/' delimiter line (alone on a line, optional spaces)
+            blocks = re.split(r'(?m)^\s*/\s*$', sql_content)
 
-            for block in blocks:
+            plsql_keywords = [
+                'CREATE OR REPLACE PACKAGE',
+                'CREATE OR REPLACE PACKAGE BODY',
+                'CREATE OR REPLACE PROCEDURE',
+                'CREATE OR REPLACE FUNCTION',
+                'CREATE OR REPLACE TRIGGER',
+                'BEGIN', 'DECLARE'
+            ]
+
+            for i, block in enumerate(blocks, start=1):
                 block = block.strip()
                 if not block or block.startswith('--'):
                     continue
@@ -557,6 +621,15 @@ class OracleManager:
                 if any(kw in upper_block for kw in plsql_keywords):
                     # Find where the PL/SQL part starts (there may be
                     # standalone DDL like CREATE TABLE before it)
+                    plsql_start = len(block)
+                    for kw in plsql_keywords:
+                        idx = upper_block.find(kw)
+                        if idx != -1 and idx < plsql_start:
+                            plsql_start = idx
+
+                # If PL/SQL-ish, execute as a whole block (don't ';'-split)
+                if any(kw in upper_block for kw in plsql_keywords):
+                    # Find PL/SQL start (there may be DDL before it)
                     plsql_start = len(block)
                     for kw in plsql_keywords:
                         idx = upper_block.find(kw)
@@ -599,8 +672,10 @@ class OracleManager:
             return True
 
         except Exception as e:
+            _print_db_error(e)
             print(f"Error executing index creation script: {e}")
             return False
+
 
     def call_refresh_data(self) -> bool:
         """Call developer.refresh_data() to populate metadata tables."""
@@ -619,7 +694,7 @@ class OracleManager:
                 # Package not installed - this is expected if index_creation.sql is placeholder
                 return False
             else:
-                print(f"    Warning: refresh_data failed: {error_str[:80]}")
+                print(f"    Warning: refresh_data failed: {error_str[:200]}")
             return False
 
     def call_setup_hybrid_search(self) -> bool:
@@ -639,7 +714,7 @@ class OracleManager:
                 # Package not installed - this is expected if index_creation.sql is placeholder
                 return False
             else:
-                print(f"    Warning: setup_hybrid_search failed: {error_str[:80]}")
+                print(f"    Warning: setup_hybrid_search failed: {error_str[:200]}")
             return False
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
