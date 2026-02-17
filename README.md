@@ -169,10 +169,72 @@ Options:
   -v, --verbose     Print verbose output
 ```
 
+### add_dev_questions_metadata.py
+
+Adds per-question table/column metadata and Oracle SQL rewrites for BIRD `dev.json` style files.
+
+```bash
+python add_dev_questions_metadata.py <input_dev.json> [output_dev.json] [--method rule_based|llm]
+```
+
+Key options:
+
+- `--method`: `rule_based` (default) or `llm`
+- `--llm-provider`: `openai_compat` (default) or `ollama`
+- `--llm-model`: model name (e.g., `gpt-4o-mini`, `qwen2.5:3b`)
+- `--llm-base-url`: custom API base URL
+- `--llm-api-key`: API key for `openai_compat` provider
+
+## Using Ollama with Local Open-Source Models
+
+If you want a free/local setup, use `--method llm --llm-provider ollama`.
+
+### 1) Install and start Ollama
+
+Install Ollama from [https://ollama.com](https://ollama.com), then start the service:
+
+```bash
+ollama serve
+```
+
+### 2) Pull a local model
+
+Example models that work well for lightweight extraction tasks:
+
+```bash
+ollama pull qwen2.5:3b
+# or
+ollama pull llama3.1:8b
+# or
+ollama pull mistral:7b
+```
+
+### 3) Run metadata generation with Ollama
+
+```bash
+python add_dev_questions_metadata.py \
+  dev_original.json dev_with_metadata.json \
+  --method llm \
+  --llm-provider ollama \
+  --llm-model qwen2.5:3b \
+  --llm-base-url http://localhost:11434
+```
+
+Notes:
+
+- If Ollama is not reachable or the model output is invalid, the script automatically falls back to `rule_based` extraction and continues.
+- For higher accuracy on complex SQL, try a larger model (e.g., 7B/8B+).
+- No OpenAI API key is needed when using `--llm-provider ollama`.
+
 ## Requirements
 
 - Python 3.6+
 - No external dependencies (uses only standard library)
+
+Optional dependencies:
+
+- `openai` Python package only if you use `--method llm --llm-provider openai_compat`
+- Ollama runtime only if you use `--method llm --llm-provider ollama`
 
 
 ## Hybrid Search Evaluation
