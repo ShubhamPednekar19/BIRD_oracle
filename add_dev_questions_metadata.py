@@ -24,17 +24,16 @@ Example:
 
 import argparse
 import json
+import os
 import re
-import sys
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 from urllib import request, error
 
 try:
-    from openai import OpenAI
-except ImportError:  # Optional dependency for --method llm
-    OpenAI = None
-
+    from groq import Groq
+except ImportError:  # Optional dependency for --llm-provider groq
+    Groq = None
 
 # SQL keywords to exclude from columns
 SQL_KEYWORDS = {
@@ -64,6 +63,20 @@ SQL_KEYWORDS = {
     'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10',
     'T11', 'T12', 'T13', 'T14', 'T15', 'T16', 'T17', 'T18', 'T19', 'T20'
 }
+# Keywords that may legitimately appear as unquoted column names in BIRD schemas
+# and should not be dropped during heuristic extraction.
+NON_FILTERABLE_IDENTIFIER_KEYWORDS = {
+    'POWER',
+}
+
+
+# Keywords that may legitimately appear as unquoted table names in BIRD schemas.
+NON_FILTERABLE_TABLE_KEYWORDS = {
+    'MATCH',
+    'ORDER',
+}
+
+
 
 # Oracle reserved words that need to be quoted
 ORACLE_RESERVED_WORDS = {
@@ -377,7 +390,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
     for match in from_matches:
         table_name = match[0].strip('`"')
         alias = match[1].strip('`"') if match[1] else None
-        if table_name.upper() not in SQL_KEYWORDS:
+        if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
             if alias:
@@ -389,7 +402,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
     for match in join_matches:
         table_name = match[0].strip('`"')
         alias = match[1].strip('`"') if match[1] else None
-        if table_name.upper() not in SQL_KEYWORDS:
+        if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
             if alias:
@@ -397,7 +410,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
 
     # Handle comma-separated tables in FROM clause
     from_clause_match = re.search(
-        r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\b|\bGROUP\b|\bLIMIT\b|\bHAVING\b|$)',
+        r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bHAVING\b|$)',
         sql_normalized, re.IGNORECASE
     )
     if from_clause_match:
@@ -410,7 +423,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
             if match:
                 table_name = match.group(1).strip('`"')
                 alias = match.group(2).strip('`"') if match.group(2) else None
-                if table_name.upper() not in SQL_KEYWORDS:
+                if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
                     if table_name not in tables:
                         tables.append(table_name)
                     if alias:
@@ -472,9 +485,9 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
     # Extract simple columns from various clauses and try to associate them
     # Look for patterns like: WHERE column = or ORDER BY column
     simple_col_contexts = [
-        (r'\bWHERE\s+(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)', 'where'),
-        (r'\bORDER\s+BY\s+(\w+)', 'order'),
-        (r'\bGROUP\s+BY\s+(\w+)', 'group'),
+        (r'\bWHERE\s+(?:\w+\.)?(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)', 'where'),
+        (r'\bORDER\s+BY\s+(?:\w+\.)?(\w+)', 'order'),
+        (r'\bGROUP\s+BY\s+(?:\w+\.)?(\w+)', 'group'),
     ]
 
     for pattern, context in simple_col_contexts:
@@ -486,6 +499,38 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
                 if not already_assigned and tables:
                     # Assign to first table as default
                     table_columns[tables[0]].add(col)
+
+    # For single-table queries, recover identifiers across the full SQL expression.
+    # This captures columns used in SELECT/WHERE/ORDER BY (e.g., DISTINCT availability,
+    # power LIKE ..., promoTypes = ..., COUNT(id), etc.).
+    if len(tables) == 1:
+        single_table = tables[0]
+        # Keep quoted identifiers out of token-based fallback extraction so pieces of
+        # names like `County Name` or `Free Meal Count (K-12)` do not become spurious
+        # columns such as County/Name/Free/Meal/K.
+        scrubbed_sql = re.sub(r"'[^']*'", " ", sql_normalized)
+        scrubbed_sql = re.sub(r'`[^`]+`|"[^"]+"', ' ', scrubbed_sql)
+        # Skip aliases introduced with AS (e.g., SELECT ... AS atom_id1) so derived
+        # labels are not treated as physical columns.
+        as_aliases = {
+            alias.strip('`"').upper()
+            for alias in re.findall(r'\bAS\s+([`"\w]+)', sql_normalized, re.IGNORECASE)
+        }
+        tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', scrubbed_sql)
+        for token in tokens:
+            upper_token = token.upper()
+            if upper_token in SQL_KEYWORDS and upper_token not in NON_FILTERABLE_IDENTIFIER_KEYWORDS:
+                continue
+            if token == single_table or upper_token == single_table.upper():
+                continue
+            if upper_token in alias_to_table:
+                continue
+            if upper_token in as_aliases:
+                continue
+            # Skip function names (identifier followed by opening parenthesis)
+            if re.search(rf'\b{re.escape(token)}\s*\(', scrubbed_sql):
+                continue
+            table_columns[single_table].add(token)
 
     return table_columns
 
@@ -514,7 +559,7 @@ def extract_tables_with_columns(sql: str) -> List[Dict]:
         # Filter out any remaining keywords
         filtered_columns = [
             col for col in sorted(columns)
-            if col.upper() not in SQL_KEYWORDS
+            if (col.upper() not in SQL_KEYWORDS or col.upper() in NON_FILTERABLE_IDENTIFIER_KEYWORDS)
             and not col.isdigit()
             and len(col) > 0
         ]
@@ -560,34 +605,119 @@ def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
     return cleaned
 
 
-def extract_tables_with_columns_llm_openai_compat(sql: str, model: str, api_key: Optional[str], base_url: Optional[str]) -> List[Dict]:
-    """Extract tables/columns using an OpenAI-compatible LLM endpoint."""
-    if OpenAI is None:
-        raise RuntimeError("openai package is not installed; install it or use --method rule_based")
-
-    client_kwargs = {}
-    if api_key:
-        client_kwargs["api_key"] = api_key
-    if base_url:
-        client_kwargs["base_url"] = base_url
-    client = OpenAI(**client_kwargs)
-
-    prompt = (
-        "Extract table names and corresponding column names from the SQL query. "
-        "Return strict JSON with this schema: "
-        "{\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}. "
-        "Do not include extra keys or commentary. SQL:\n"
-        f"{sql}"
+def _build_batched_sql_prompt(sql_items: List[Tuple[int, str]]) -> Tuple[str, str]:
+    """Build system/user prompts for batched SQL extraction."""
+    instructions = (
+        "You extract table and column metadata from SQL queries. "
+        "Return strict JSON only with this schema: "
+        "{\"items\":[{\"index\":0,\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}]}. "
+        "The index must match the provided item index. "
+        "Do not include markdown fences or extra text."
     )
 
-    response = client.responses.create(
+    lines = ["SQL items:"]
+    for idx, sql in sql_items:
+        lines.append(f"Index {idx}:")
+        lines.append(sql)
+        lines.append("---")
+    return instructions, "\n".join(lines)
+
+
+
+def extract_tables_with_columns_llm_groq_batch(
+    sql_items: List[Tuple[int, str]],
+    model: str,
+    api_key: str,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via the Groq Python SDK."""
+    if Groq is None:
+        raise RuntimeError("groq package is not installed; install it or use --llm-provider openrouter/openai_compat")
+
+    instructions, user_prompt = _build_batched_sql_prompt(sql_items)
+    client = Groq(api_key=api_key)
+    completion = client.chat.completions.create(
         model=model,
-        input=prompt,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_prompt},
+        ],
         temperature=0,
     )
 
-    parsed = _extract_json_object(response.output_text)
-    return _normalize_llm_table_payload(parsed)
+    try:
+        content = completion.choices[0].message.content
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise RuntimeError("Unexpected Groq response shape") from exc
+
+    parsed = _extract_json_object(content)
+    items = parsed.get("items", [])
+    result: Dict[int, List[Dict]] = {}
+    for item in items:
+        try:
+            idx = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    return result
+
+
+
+def extract_tables_with_columns_llm_chat_completions_batch(
+    sql_items: List[Tuple[int, str]],
+    model: str,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via HTTP chat-completions-compatible APIs (OpenAI/OpenRouter)."""
+    endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
+
+    instructions, user_prompt = _build_batched_sql_prompt(sql_items)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
+
+    req = request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except error.URLError as exc:
+        raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
+
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected chat completion response shape: {body}") from exc
+
+    parsed = _extract_json_object(content)
+    items = parsed.get("items", [])
+    result: Dict[int, List[Dict]] = {}
+    for item in items:
+        try:
+            idx = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    return result
+
 
 
 def extract_tables_with_columns_llm_ollama(sql: str, model: str, base_url: Optional[str]) -> List[Dict]:
@@ -624,6 +754,9 @@ def process_dev_file(
     llm_api_key: Optional[str] = None,
     llm_base_url: Optional[str] = None,
     llm_provider: str = "openai_compat",
+    llm_site_url: Optional[str] = None,
+    llm_app_name: Optional[str] = None,
+    llm_batch_size: int = 35,
 ) -> None:
     """
     Process the dev.json file and add tables with nested columns metadata
@@ -640,38 +773,93 @@ def process_dev_file(
 
     print(f"Processing {len(questions)} questions...")
 
-    for i, question in enumerate(questions):
-        sql = question.get('SQL', '')
+    for question in questions:
+        question['tables'] = []
 
-        # Extract tables and columns
-        if method == "llm":
-            try:
-                if llm_provider == "ollama":
-                    tables_with_columns = extract_tables_with_columns_llm_ollama(
+    if method == "llm":
+        if llm_provider == "ollama":
+            for i, question in enumerate(questions):
+                sql = question.get('SQL', '')
+                try:
+                    question['tables'] = extract_tables_with_columns_llm_ollama(
                         sql,
                         model=llm_model,
                         base_url=llm_base_url,
                     )
-                else:
-                    tables_with_columns = extract_tables_with_columns_llm_openai_compat(
-                        sql,
-                        model=llm_model,
-                        api_key=llm_api_key,
-                        base_url=llm_base_url,
-                    )
-            except Exception as exc:
-                print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
-                tables_with_columns = extract_tables_with_columns(sql)
+                except Exception as exc:
+                    print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
+                    question['tables'] = extract_tables_with_columns(sql)
+                if (i + 1) % 100 == 0:
+                    print(f"  Processed {i + 1} questions...")
         else:
-            tables_with_columns = extract_tables_with_columns(sql)
-        question['tables'] = tables_with_columns
+            effective_api_key = llm_api_key
+            effective_base_url = llm_base_url
+            extra_headers: Dict[str, str] = {}
 
-        # Convert SQL to Oracle format
-        oracle_sql = convert_sqlite_to_oracle_sql(sql)
-        question['oracle_SQL'] = oracle_sql
+            if llm_provider == "openrouter":
+                effective_api_key = effective_api_key or os.getenv("OPENROUTER_API_KEY")
+                effective_base_url = effective_base_url or "https://openrouter.ai/api/v1"
+                if not effective_api_key:
+                    raise RuntimeError("Missing OpenRouter API key. Pass --llm-api-key or set OPENROUTER_API_KEY.")
+                if llm_site_url:
+                    extra_headers["HTTP-Referer"] = llm_site_url
+                if llm_app_name:
+                    extra_headers["X-Title"] = llm_app_name
+            elif llm_provider == "groq":
+                effective_api_key = effective_api_key or os.getenv("GROQ_API_KEY")
+                effective_base_url = effective_base_url or "https://api.groq.com/openai/v1"
+                if not effective_api_key:
+                    raise RuntimeError("Missing Groq API key. Pass --llm-api-key or set GROQ_API_KEY.")
+            else:
+                effective_api_key = effective_api_key or os.getenv("OPENAI_API_KEY")
 
-        if (i + 1) % 100 == 0:
-            print(f"  Processed {i + 1} questions...")
+            batch_size = max(1, llm_batch_size)
+            for batch_start in range(0, len(questions), batch_size):
+                batch_end = min(batch_start + batch_size, len(questions))
+                sql_items = [
+                    (idx, questions[idx].get('SQL', ''))
+                    for idx in range(batch_start, batch_end)
+                ]
+                try:
+                    if llm_provider == "groq":
+                        batch_result = extract_tables_with_columns_llm_groq_batch(
+                            sql_items,
+                            model=llm_model,
+                            api_key=effective_api_key,
+                        )
+                    else:
+                        batch_result = extract_tables_with_columns_llm_chat_completions_batch(
+                            sql_items,
+                            model=llm_model,
+                            api_key=effective_api_key,
+                            base_url=effective_base_url,
+                            extra_headers=extra_headers or None,
+                        )
+                except Exception as exc:
+                    print(
+                        f"Warning: LLM batch extraction failed for indexes {batch_start}-{batch_end - 1} ({exc}); "
+                        "falling back to rule_based for this batch"
+                    )
+                    batch_result = {}
+
+                for idx, sql in sql_items:
+                    if idx in batch_result:
+                        questions[idx]['tables'] = batch_result[idx]
+                    else:
+                        questions[idx]['tables'] = extract_tables_with_columns(sql)
+
+                if batch_end % 100 == 0 or batch_end == len(questions):
+                    print(f"  Processed {batch_end} questions...")
+    else:
+        for i, question in enumerate(questions):
+            sql = question.get('SQL', '')
+            question['tables'] = extract_tables_with_columns(sql)
+            if (i + 1) % 100 == 0:
+                print(f"  Processed {i + 1} questions...")
+
+    for question in questions:
+        sql = question.get('SQL', '')
+        question['oracle_SQL'] = convert_sqlite_to_oracle_sql(sql)
 
     print(f"Writing output file: {output_path}")
 
@@ -694,6 +882,7 @@ def process_dev_file(
     print(f"  Average columns per question: {total_columns / len(questions):.2f}")
 
 
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -712,9 +901,25 @@ def main():
     parser.add_argument("--llm-base-url", default=None, help="Base URL for OpenAI-compatible endpoint")
     parser.add_argument(
         "--llm-provider",
-        choices=["openai_compat", "ollama"],
+        choices=["openai_compat", "openrouter", "groq", "ollama"],
         default="openai_compat",
-        help="LLM backend for --method llm. Use ollama for local open-source models.",
+        help="LLM backend for --method llm. Supports openai_compat, openrouter, groq, and ollama.",
+    )
+    parser.add_argument(
+        "--llm-site-url",
+        default=None,
+        help="Optional site URL for OpenRouter HTTP-Referer header.",
+    )
+    parser.add_argument(
+        "--llm-app-name",
+        default=None,
+        help="Optional app name for OpenRouter X-Title header.",
+    )
+    parser.add_argument(
+        "--llm-batch-size",
+        type=int,
+        default=35,
+        help="Number of questions sent in one LLM request for OpenAI-compatible providers.",
     )
     args = parser.parse_args()
 
@@ -727,6 +932,9 @@ def main():
         llm_api_key=args.llm_api_key,
         llm_base_url=args.llm_base_url,
         llm_provider=args.llm_provider,
+        llm_site_url=args.llm_site_url,
+        llm_app_name=args.llm_app_name,
+        llm_batch_size=args.llm_batch_size,
     )
 
 

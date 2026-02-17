@@ -180,10 +180,74 @@ python add_dev_questions_metadata.py <input_dev.json> [output_dev.json] [--metho
 Key options:
 
 - `--method`: `rule_based` (default) or `llm`
-- `--llm-provider`: `openai_compat` (default) or `ollama`
+- `--llm-provider`: `openai_compat` (default), `openrouter`, `groq`, or `ollama`
 - `--llm-model`: model name (e.g., `gpt-4o-mini`, `qwen2.5:3b`)
 - `--llm-base-url`: custom API base URL
 - `--llm-api-key`: API key for `openai_compat` provider
+- `--llm-site-url`: optional OpenRouter `HTTP-Referer` header value
+- `--llm-app-name`: optional OpenRouter `X-Title` header value
+- `--llm-batch-size`: questions per LLM request for OpenAI-compatible providers (default `35`)
+
+## Using OpenRouter
+
+Use `--method llm --llm-provider openrouter` to run extraction via OpenRouter.
+
+### 1) Set your API key
+
+```bash
+export OPENROUTER_API_KEY="<your_openrouter_api_key>"
+```
+
+You can also pass the key directly with `--llm-api-key`.
+
+### 2) Run metadata generation with OpenRouter
+
+```bash
+python add_dev_questions_metadata.py \
+  dev_original.json dev_with_metadata.json \
+  --method llm \
+  --llm-provider openrouter \
+  --llm-model openai/gpt-4o-mini \
+  --llm-site-url https://your-app.example \
+  --llm-app-name "BIRD Oracle Metadata"
+```
+
+Notes:
+
+- Default OpenRouter base URL is `https://openrouter.ai/api/v1`.
+- Override endpoint with `--llm-base-url` if needed.
+- If OpenRouter fails for a query, the script falls back to `rule_based` extraction and continues.
+
+
+## Using Groq
+
+Use `--method llm --llm-provider groq` for Groq-hosted inference.
+
+### 1) Set your API key
+
+```bash
+export GROQ_API_KEY="<your_groq_api_key>"
+```
+
+You can also pass the key directly with `--llm-api-key`.
+
+### 2) Run metadata generation with Groq (batched)
+
+```bash
+python add_dev_questions_metadata.py \
+  dev_original.json dev_with_metadata.json \
+  --method llm \
+  --llm-provider groq \
+  --llm-model qwen/qwen3-coder:free \
+  --llm-batch-size 35
+```
+
+Notes:
+
+- Default Groq-compatible base URL is `https://api.groq.com/openai/v1`.
+- Groq provider uses the Groq Python SDK (`Groq(...).chat.completions.create(...)`) with batched prompts.
+- You can change endpoint with `--llm-base-url` if needed.
+- For OpenAI-compatible providers (`openai_compat`, `openrouter`, `groq`), questions are sent in batches (default 35 per request) instead of one-by-one.
 
 ## Using Ollama with Local Open-Source Models
 
@@ -233,7 +297,7 @@ Notes:
 
 Optional dependencies:
 
-- `openai` Python package only if you use `--method llm --llm-provider openai_compat`
+- `groq` Python package if you use `--method llm --llm-provider groq`
 - Ollama runtime only if you use `--method llm --llm-provider ollama`
 
 
