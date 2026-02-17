@@ -22,11 +22,18 @@ Example:
     python add_dev_questions_metadata.py dev.json dev_with_metadata.json
 """
 
+import argparse
 import json
 import re
 import sys
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
+from urllib import request, error
+
+try:
+    from openai import OpenAI
+except ImportError:  # Optional dependency for --method llm
+    OpenAI = None
 
 
 # SQL keywords to exclude from columns
@@ -365,11 +372,11 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
 
     # Pattern for FROM clause: FROM table_name [AS] alias
     # Matches: FROM district T1, FROM district AS T1, FROM district
-    from_pattern = r'\bFROM\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?'
+    from_pattern = r'\bFROM\s+([`"\w]+)(?:\s+(?:AS\s+)?([`"\w]+))?'
     from_matches = re.findall(from_pattern, sql_normalized, re.IGNORECASE)
     for match in from_matches:
-        table_name = match[0]
-        alias = match[1] if match[1] else None
+        table_name = match[0].strip('`"')
+        alias = match[1].strip('`"') if match[1] else None
         if table_name.upper() not in SQL_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
@@ -377,11 +384,11 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
                 alias_to_table[alias.upper()] = table_name
 
     # Pattern for JOIN clauses
-    join_pattern = r'\bJOIN\s+(\w+)(?:\s+(?:AS\s+)?(\w+))?'
+    join_pattern = r'\bJOIN\s+([`"\w]+)(?:\s+(?:AS\s+)?([`"\w]+))?'
     join_matches = re.findall(join_pattern, sql_normalized, re.IGNORECASE)
     for match in join_matches:
-        table_name = match[0]
-        alias = match[1] if match[1] else None
+        table_name = match[0].strip('`"')
+        alias = match[1].strip('`"') if match[1] else None
         if table_name.upper() not in SQL_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
@@ -399,10 +406,10 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
         for part in parts:
             part = part.strip()
             # Match: table_name [AS] alias
-            match = re.match(r'(\w+)(?:\s+(?:AS\s+)?(\w+))?', part, re.IGNORECASE)
+            match = re.match(r'([`"\w]+)(?:\s+(?:AS\s+)?([`"\w]+))?', part, re.IGNORECASE)
             if match:
-                table_name = match.group(1)
-                alias = match.group(2) if match.group(2) else None
+                table_name = match.group(1).strip('`"')
+                alias = match.group(2).strip('`"') if match.group(2) else None
                 if table_name.upper() not in SQL_KEYWORDS:
                     if table_name not in tables:
                         tables.append(table_name)
@@ -521,7 +528,103 @@ def extract_tables_with_columns(sql: str) -> List[Dict]:
     return result
 
 
-def process_dev_file(input_path: str, output_path: str) -> None:
+def _extract_json_object(text: str) -> Dict:
+    """Extract a JSON object from raw LLM text output."""
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("No JSON object found in LLM response")
+    return json.loads(text[start:end + 1])
+
+
+def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
+    """Normalize/clean LLM JSON payload to expected tables schema."""
+    tables = payload.get("tables", [])
+    cleaned = []
+    for table in tables:
+        name = str(table.get("name", "")).strip('`" ')
+        if not name:
+            continue
+        cols = []
+        for col in table.get("columns", []):
+            col_name = str(col.get("name", "")).strip('`" ')
+            if col_name and col_name.upper() not in SQL_KEYWORDS:
+                cols.append({"name": col_name})
+        cleaned.append({"name": name, "columns": cols})
+    return cleaned
+
+
+def extract_tables_with_columns_llm_openai_compat(sql: str, model: str, api_key: Optional[str], base_url: Optional[str]) -> List[Dict]:
+    """Extract tables/columns using an OpenAI-compatible LLM endpoint."""
+    if OpenAI is None:
+        raise RuntimeError("openai package is not installed; install it or use --method rule_based")
+
+    client_kwargs = {}
+    if api_key:
+        client_kwargs["api_key"] = api_key
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = OpenAI(**client_kwargs)
+
+    prompt = (
+        "Extract table names and corresponding column names from the SQL query. "
+        "Return strict JSON with this schema: "
+        "{\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}. "
+        "Do not include extra keys or commentary. SQL:\n"
+        f"{sql}"
+    )
+
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        temperature=0,
+    )
+
+    parsed = _extract_json_object(response.output_text)
+    return _normalize_llm_table_payload(parsed)
+
+
+def extract_tables_with_columns_llm_ollama(sql: str, model: str, base_url: Optional[str]) -> List[Dict]:
+    """Extract tables/columns using a local Ollama server (open-source models)."""
+    endpoint = (base_url or "http://localhost:11434").rstrip('/') + "/api/generate"
+    prompt = (
+        "Extract table names and corresponding column names from the SQL query. "
+        "Return strict JSON with this schema: "
+        "{\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}. "
+        "Do not include extra keys or commentary. SQL:\n"
+        f"{sql}"
+    )
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }).encode("utf-8")
+    req = request.Request(endpoint, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except error.URLError as exc:
+        raise RuntimeError(f"Ollama request failed: {exc}") from exc
+
+    parsed = _extract_json_object(body.get("response", ""))
+    return _normalize_llm_table_payload(parsed)
+
+
+def process_dev_file(
+    input_path: str,
+    output_path: str,
+    method: str = "rule_based",
+    llm_model: str = "gpt-4o-mini",
+    llm_api_key: Optional[str] = None,
+    llm_base_url: Optional[str] = None,
+    llm_provider: str = "openai_compat",
+) -> None:
     """
     Process the dev.json file and add tables with nested columns metadata
     and Oracle SQL conversion.
@@ -541,7 +644,26 @@ def process_dev_file(input_path: str, output_path: str) -> None:
         sql = question.get('SQL', '')
 
         # Extract tables and columns
-        tables_with_columns = extract_tables_with_columns(sql)
+        if method == "llm":
+            try:
+                if llm_provider == "ollama":
+                    tables_with_columns = extract_tables_with_columns_llm_ollama(
+                        sql,
+                        model=llm_model,
+                        base_url=llm_base_url,
+                    )
+                else:
+                    tables_with_columns = extract_tables_with_columns_llm_openai_compat(
+                        sql,
+                        model=llm_model,
+                        api_key=llm_api_key,
+                        base_url=llm_base_url,
+                    )
+            except Exception as exc:
+                print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
+                tables_with_columns = extract_tables_with_columns(sql)
+        else:
+            tables_with_columns = extract_tables_with_columns(sql)
         question['tables'] = tables_with_columns
 
         # Convert SQL to Oracle format
@@ -574,15 +696,38 @@ def process_dev_file(input_path: str, output_path: str) -> None:
 
 def main():
     """Main entry point."""
-    if len(sys.argv) < 2:
-        print("Usage: python add_dev_questions_metadata.py <input_dev.json> [output_dev.json]")
-        print("\nIf output path is not specified, the input file will be modified in place.")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Add tables/columns metadata and Oracle SQL conversion to BIRD dev questions."
+    )
+    parser.add_argument("input_dev", help="Path to input dev.json")
+    parser.add_argument("output_dev", nargs="?", help="Path to output file (defaults to input path)")
+    parser.add_argument(
+        "--method",
+        choices=["rule_based", "llm"],
+        default="rule_based",
+        help="Table/column extraction strategy. llm uses an OpenAI-compatible endpoint.",
+    )
+    parser.add_argument("--llm-model", default="gpt-4o-mini", help="Model name for --method llm")
+    parser.add_argument("--llm-api-key", default=None, help="API key for OpenAI-compatible endpoint")
+    parser.add_argument("--llm-base-url", default=None, help="Base URL for OpenAI-compatible endpoint")
+    parser.add_argument(
+        "--llm-provider",
+        choices=["openai_compat", "ollama"],
+        default="openai_compat",
+        help="LLM backend for --method llm. Use ollama for local open-source models.",
+    )
+    args = parser.parse_args()
 
-    input_path = sys.argv[1]
-    output_path = sys.argv[2] if len(sys.argv) > 2 else input_path
-
-    process_dev_file(input_path, output_path)
+    output_path = args.output_dev if args.output_dev else args.input_dev
+    process_dev_file(
+        args.input_dev,
+        output_path,
+        method=args.method,
+        llm_model=args.llm_model,
+        llm_api_key=args.llm_api_key,
+        llm_base_url=args.llm_base_url,
+        llm_provider=args.llm_provider,
+    )
 
 
 if __name__ == "__main__":
