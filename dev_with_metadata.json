@@ -11,28 +11,13 @@
         "name": "frpm",
         "columns": [
           {
-            "name": "County"
-          },
-          {
             "name": "County Name"
           },
           {
             "name": "Enrollment (K-12)"
           },
           {
-            "name": "Free"
-          },
-          {
             "name": "Free Meal Count (K-12)"
-          },
-          {
-            "name": "K"
-          },
-          {
-            "name": "Meal"
-          },
-          {
-            "name": "Name"
           }
         ]
       }
@@ -51,31 +36,13 @@
         "name": "frpm",
         "columns": [
           {
-            "name": "Ages"
-          },
-          {
-            "name": "Educational"
-          },
-          {
             "name": "Educational Option Type"
           },
           {
             "name": "Enrollment (Ages 5-17)"
           },
           {
-            "name": "Free"
-          },
-          {
             "name": "Free Meal Count (Ages 5-17)"
-          },
-          {
-            "name": "Meal"
-          },
-          {
-            "name": "Option"
-          },
-          {
-            "name": "Type"
           }
         ]
       }
@@ -804,28 +771,13 @@
             "name": "CDSCode"
           },
           {
-            "name": "County"
-          },
-          {
             "name": "County Name"
           },
           {
             "name": "FRPM Count (K-12)"
           },
           {
-            "name": "Free"
-          },
-          {
             "name": "Free Meal Count (K-12)"
-          },
-          {
-            "name": "K"
-          },
-          {
-            "name": "Meal"
-          },
-          {
-            "name": "Name"
           }
         ]
       }
@@ -1223,16 +1175,7 @@
             "name": "Enrollment (K-12)"
           },
           {
-            "name": "Free"
-          },
-          {
             "name": "Free Meal Count (K-12)"
-          },
-          {
-            "name": "K"
-          },
-          {
-            "name": "Meal"
           }
         ]
       }
@@ -39541,13 +39484,7 @@
         "name": "Laboratory",
         "columns": [
           {
-            "name": "CHO"
-          },
-          {
             "name": "ID"
-          },
-          {
-            "name": "T"
           },
           {
             "name": "T-CHO"
@@ -39913,22 +39850,10 @@
         "name": "Examination",
         "columns": [
           {
-            "name": "ANA"
-          },
-          {
             "name": "ANA Pattern"
           },
           {
-            "name": "IgM"
-          },
-          {
-            "name": "Pattern"
-          },
-          {
             "name": "Thrombosis"
-          },
-          {
-            "name": "aCL"
           },
           {
             "name": "aCL IgM"
@@ -39951,12 +39876,6 @@
         "columns": [
           {
             "name": "ID"
-          },
-          {
-            "name": "PRO"
-          },
-          {
-            "name": "U"
           },
           {
             "name": "U-PRO"

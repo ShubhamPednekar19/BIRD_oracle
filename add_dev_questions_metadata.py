@@ -504,7 +504,11 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
     # power LIKE ..., promoTypes = ..., COUNT(id), etc.).
     if len(tables) == 1:
         single_table = tables[0]
-        scrubbed_sql = re.sub(r"'[^']*'|\"[^\"]*\"", " ", sql_normalized)
+        # Keep quoted identifiers out of token-based fallback extraction so pieces of
+        # names like `County Name` or `Free Meal Count (K-12)` do not become spurious
+        # columns such as County/Name/Free/Meal/K.
+        scrubbed_sql = re.sub(r"'[^']*'", " ", sql_normalized)
+        scrubbed_sql = re.sub(r'`[^`]+`|"[^"]+"', ' ', scrubbed_sql)
         tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', scrubbed_sql)
         for token in tokens:
             upper_token = token.upper()
