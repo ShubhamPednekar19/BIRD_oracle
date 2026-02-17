@@ -70,6 +70,12 @@ NON_FILTERABLE_IDENTIFIER_KEYWORDS = {
 }
 
 
+# Keywords that may legitimately appear as unquoted table names in BIRD schemas.
+NON_FILTERABLE_TABLE_KEYWORDS = {
+    'MATCH',
+}
+
+
 
 # Oracle reserved words that need to be quoted
 ORACLE_RESERVED_WORDS = {
@@ -383,7 +389,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
     for match in from_matches:
         table_name = match[0].strip('`"')
         alias = match[1].strip('`"') if match[1] else None
-        if table_name.upper() not in SQL_KEYWORDS:
+        if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
             if alias:
@@ -395,7 +401,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
     for match in join_matches:
         table_name = match[0].strip('`"')
         alias = match[1].strip('`"') if match[1] else None
-        if table_name.upper() not in SQL_KEYWORDS:
+        if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
             if table_name not in tables:
                 tables.append(table_name)
             if alias:
@@ -416,7 +422,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
             if match:
                 table_name = match.group(1).strip('`"')
                 alias = match.group(2).strip('`"') if match.group(2) else None
-                if table_name.upper() not in SQL_KEYWORDS:
+                if table_name.upper() not in SQL_KEYWORDS or table_name.upper() in NON_FILTERABLE_TABLE_KEYWORDS:
                     if table_name not in tables:
                         tables.append(table_name)
                     if alias:
@@ -478,9 +484,9 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
     # Extract simple columns from various clauses and try to associate them
     # Look for patterns like: WHERE column = or ORDER BY column
     simple_col_contexts = [
-        (r'\bWHERE\s+(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)', 'where'),
-        (r'\bORDER\s+BY\s+(\w+)', 'order'),
-        (r'\bGROUP\s+BY\s+(\w+)', 'group'),
+        (r'\bWHERE\s+(?:\w+\.)?(\w+)\s*(?:=|!=|<>|>=|<=|>|<|LIKE|IN|IS|BETWEEN)', 'where'),
+        (r'\bORDER\s+BY\s+(?:\w+\.)?(\w+)', 'order'),
+        (r'\bGROUP\s+BY\s+(?:\w+\.)?(\w+)', 'group'),
     ]
 
     for pattern, context in simple_col_contexts:
