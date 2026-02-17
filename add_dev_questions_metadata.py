@@ -73,6 +73,7 @@ NON_FILTERABLE_IDENTIFIER_KEYWORDS = {
 # Keywords that may legitimately appear as unquoted table names in BIRD schemas.
 NON_FILTERABLE_TABLE_KEYWORDS = {
     'MATCH',
+    'ORDER',
 }
 
 
@@ -409,7 +410,7 @@ def extract_tables_with_aliases(sql: str) -> Tuple[Dict[str, str], List[str]]:
 
     # Handle comma-separated tables in FROM clause
     from_clause_match = re.search(
-        r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\b|\bGROUP\b|\bLIMIT\b|\bHAVING\b|$)',
+        r'\bFROM\s+(.*?)(?:\bWHERE\b|\bJOIN\b|\bORDER\s+BY\b|\bGROUP\s+BY\b|\bLIMIT\b|\bHAVING\b|$)',
         sql_normalized, re.IGNORECASE
     )
     if from_clause_match:
@@ -509,6 +510,12 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
         # columns such as County/Name/Free/Meal/K.
         scrubbed_sql = re.sub(r"'[^']*'", " ", sql_normalized)
         scrubbed_sql = re.sub(r'`[^`]+`|"[^"]+"', ' ', scrubbed_sql)
+        # Skip aliases introduced with AS (e.g., SELECT ... AS atom_id1) so derived
+        # labels are not treated as physical columns.
+        as_aliases = {
+            alias.strip('`"').upper()
+            for alias in re.findall(r'\bAS\s+([`"\w]+)', sql_normalized, re.IGNORECASE)
+        }
         tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', scrubbed_sql)
         for token in tokens:
             upper_token = token.upper()
@@ -517,6 +524,8 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
             if token == single_table or upper_token == single_table.upper():
                 continue
             if upper_token in alias_to_table:
+                continue
+            if upper_token in as_aliases:
                 continue
             # Skip function names (identifier followed by opening parenthesis)
             if re.search(rf'\b{re.escape(token)}\s*\(', scrubbed_sql):

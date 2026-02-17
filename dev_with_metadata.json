@@ -5828,6 +5828,17 @@
     "difficulty": "simple",
     "tables": [
       {
+        "name": "order",
+        "columns": [
+          {
+            "name": "account_id"
+          },
+          {
+            "name": "order_id"
+          }
+        ]
+      },
+      {
         "name": "account",
         "columns": [
           {
@@ -5835,9 +5846,6 @@
           },
           {
             "name": "district_id"
-          },
-          {
-            "name": "order_id"
           }
         ]
       },
@@ -5848,10 +5856,6 @@
             "name": "district_id"
           }
         ]
-      },
-      {
-        "name": "",
-        "columns": []
       }
     ],
     "oracle_SQL": "SELECT T3.district_id FROM \"order\" AS T1 INNER JOIN account AS T2 ON T1.account_id = T2.account_id INNER JOIN district AS T3 ON T2.district_id = T3.district_id WHERE T1.order_id = 33333"
@@ -6068,13 +6072,21 @@
     "difficulty": "simple",
     "tables": [
       {
-        "name": "account",
+        "name": "order",
         "columns": [
           {
             "name": "account_id"
           },
           {
             "name": "order_id"
+          }
+        ]
+      },
+      {
+        "name": "account",
+        "columns": [
+          {
+            "name": "account_id"
           }
         ]
       },
@@ -6096,10 +6108,6 @@
             "name": "client_id"
           }
         ]
-      },
-      {
-        "name": "",
-        "columns": []
       }
     ],
     "oracle_SQL": "SELECT T3.client_id FROM \"order\" AS T1 INNER JOIN account AS T2 ON T1.account_id = T2.account_id INNER JOIN disp AS T4 ON T4.account_id = T2.account_id  INNER JOIN client AS T3 ON T4.client_id = T3.client_id WHERE T1.order_id = 32423"
@@ -6386,18 +6394,13 @@
             "name": "account_id"
           },
           {
-            "name": "amount"
-          },
-          {
             "name": "frequency"
-          },
-          {
-            "name": "k_symbol"
-          },
-          {
-            "name": "total_amount"
           }
         ]
+      },
+      {
+        "name": "order",
+        "columns": []
       }
     ],
     "oracle_SQL": "SELECT T1.frequency, T2.k_symbol FROM account AS T1 INNER JOIN (SELECT account_id, k_symbol, SUM(amount) AS total_amount FROM \"order\" GROUP BY account_id, k_symbol) AS T2 ON T1.account_id = T2.account_id WHERE T1.account_id = 3 AND T2.total_amount = 3539"
@@ -7350,9 +7353,6 @@
         "name": "bond",
         "columns": [
           {
-            "name": "T"
-          },
-          {
             "name": "bond_id"
           },
           {
@@ -8214,12 +8214,6 @@
         "name": "bond",
         "columns": [
           {
-            "name": "atom_id1"
-          },
-          {
-            "name": "atom_id2"
-          },
-          {
             "name": "bond_id"
           },
           {
@@ -8241,9 +8235,6 @@
       {
         "name": "molecule",
         "columns": [
-          {
-            "name": "diff_car_notcar"
-          },
           {
             "name": "label"
           },
@@ -8459,9 +8450,6 @@
       {
         "name": "bond",
         "columns": [
-          {
-            "name": "T"
-          },
           {
             "name": "bond_type"
           },
@@ -26191,9 +26179,6 @@
       {
         "name": "superhero",
         "columns": [
-          {
-            "name": "CALCULATE"
-          },
           {
             "name": "full_name"
           },
@@ -46801,9 +46786,6 @@
         "columns": [
           {
             "name": "major_name"
-          },
-          {
-            "name": "ratio"
           }
         ]
       }
@@ -49605,9 +49587,6 @@
         "columns": [
           {
             "name": "Currency"
-          },
-          {
-            "name": "ratio"
           }
         ]
       }
