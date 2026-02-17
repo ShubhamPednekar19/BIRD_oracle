@@ -486,6 +486,26 @@ def extract_columns_for_tables(sql: str, alias_to_table: Dict[str, str], tables:
                     # Assign to first table as default
                     table_columns[tables[0]].add(col)
 
+    # Extract unqualified identifiers from SELECT list for single-table queries.
+    # This catches cases like CASE WHEN borderColor = ... and COUNT(id).
+    if len(tables) == 1:
+        select_match = re.search(r'\bSELECT\b(.*?)\bFROM\b', sql_normalized, re.IGNORECASE)
+        if select_match:
+            select_clause = select_match.group(1)
+            # Remove quoted string literals to avoid treating them as identifiers
+            select_clause = re.sub(r"'[^']*'|\"[^\"]*\"", " ", select_clause)
+            tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', select_clause)
+            for token in tokens:
+                upper_token = token.upper()
+                if upper_token in SQL_KEYWORDS:
+                    continue
+                if token in tables or upper_token in alias_to_table:
+                    continue
+                # Skip function names (identifier followed by opening parenthesis)
+                if re.search(rf'\b{re.escape(token)}\s*\(', select_clause):
+                    continue
+                table_columns[tables[0]].add(token)
+
     return table_columns
 
 
