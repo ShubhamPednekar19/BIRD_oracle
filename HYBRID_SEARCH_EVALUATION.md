@@ -180,7 +180,7 @@ Then open `http://localhost:8000/report.html` in your browser.
 | `--port` | | 8000 | Port for the local HTTP server |
 | `--single-user-mode` | | false | Load all selected schemas into one Oracle user and run all queries there |
 | `--single-user-name` | | `BIRD_ALL` | Username for `--single-user-mode` (password is the same as username) |
-| `--parallel-discovery` | | false | Use `developer.discover_objects_parallel()` instead of sequential discover |
+| `--mode` | sequential\|parallel\|unified | sequential | Select discovery procedure (`discover_objects`, `discover_objects_parallel`, or `discover_objects_unified`) |
 
 ### Discovery Argument Group
 
