@@ -24,17 +24,11 @@ Example:
 
 import argparse
 import json
+import os
 import re
-import sys
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 from urllib import request, error
-
-try:
-    from openai import OpenAI
-except ImportError:  # Optional dependency for --method llm
-    OpenAI = None
-
 
 # SQL keywords to exclude from columns
 SQL_KEYWORDS = {
@@ -560,34 +554,75 @@ def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
     return cleaned
 
 
-def extract_tables_with_columns_llm_openai_compat(sql: str, model: str, api_key: Optional[str], base_url: Optional[str]) -> List[Dict]:
-    """Extract tables/columns using an OpenAI-compatible LLM endpoint."""
-    if OpenAI is None:
-        raise RuntimeError("openai package is not installed; install it or use --method rule_based")
+def extract_tables_with_columns_llm_openai_compat_batch(
+    sql_items: List[Tuple[int, str]],
+    model: str,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via OpenAI-compatible chat completions API."""
+    endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
 
-    client_kwargs = {}
+    instructions = (
+        "You extract table and column metadata from SQL queries. "
+        "Return strict JSON only with this schema: "
+        "{\"items\":[{\"index\":0,\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}]}. "
+        "The index must match the provided item index. "
+        "Do not include markdown fences or extra text."
+    )
+
+    lines = ["SQL items:"]
+    for idx, sql in sql_items:
+        lines.append(f"Index {idx}:")
+        lines.append(sql)
+        lines.append("---")
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": "\n".join(lines)},
+        ],
+        "temperature": 0,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+    }
     if api_key:
-        client_kwargs["api_key"] = api_key
-    if base_url:
-        client_kwargs["base_url"] = base_url
-    client = OpenAI(**client_kwargs)
+        headers["Authorization"] = f"Bearer {api_key}"
+    if extra_headers:
+        headers.update(extra_headers)
 
-    prompt = (
-        "Extract table names and corresponding column names from the SQL query. "
-        "Return strict JSON with this schema: "
-        "{\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}. "
-        "Do not include extra keys or commentary. SQL:\n"
-        f"{sql}"
+    req = request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
     )
+    try:
+        with request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except error.URLError as exc:
+        raise RuntimeError(f"OpenAI-compatible request failed: {exc}") from exc
 
-    response = client.responses.create(
-        model=model,
-        input=prompt,
-        temperature=0,
-    )
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected chat completion response shape: {body}") from exc
 
-    parsed = _extract_json_object(response.output_text)
-    return _normalize_llm_table_payload(parsed)
+    parsed = _extract_json_object(content)
+    items = parsed.get("items", [])
+    result: Dict[int, List[Dict]] = {}
+    for item in items:
+        try:
+            idx = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    return result
+
 
 
 def extract_tables_with_columns_llm_ollama(sql: str, model: str, base_url: Optional[str]) -> List[Dict]:
@@ -624,6 +659,9 @@ def process_dev_file(
     llm_api_key: Optional[str] = None,
     llm_base_url: Optional[str] = None,
     llm_provider: str = "openai_compat",
+    llm_site_url: Optional[str] = None,
+    llm_app_name: Optional[str] = None,
+    llm_batch_size: int = 35,
 ) -> None:
     """
     Process the dev.json file and add tables with nested columns metadata
@@ -640,38 +678,86 @@ def process_dev_file(
 
     print(f"Processing {len(questions)} questions...")
 
-    for i, question in enumerate(questions):
-        sql = question.get('SQL', '')
+    for question in questions:
+        question['tables'] = []
 
-        # Extract tables and columns
-        if method == "llm":
-            try:
-                if llm_provider == "ollama":
-                    tables_with_columns = extract_tables_with_columns_llm_ollama(
+    if method == "llm":
+        if llm_provider == "ollama":
+            for i, question in enumerate(questions):
+                sql = question.get('SQL', '')
+                try:
+                    question['tables'] = extract_tables_with_columns_llm_ollama(
                         sql,
                         model=llm_model,
                         base_url=llm_base_url,
                     )
-                else:
-                    tables_with_columns = extract_tables_with_columns_llm_openai_compat(
-                        sql,
-                        model=llm_model,
-                        api_key=llm_api_key,
-                        base_url=llm_base_url,
-                    )
-            except Exception as exc:
-                print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
-                tables_with_columns = extract_tables_with_columns(sql)
+                except Exception as exc:
+                    print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
+                    question['tables'] = extract_tables_with_columns(sql)
+                if (i + 1) % 100 == 0:
+                    print(f"  Processed {i + 1} questions...")
         else:
-            tables_with_columns = extract_tables_with_columns(sql)
-        question['tables'] = tables_with_columns
+            effective_api_key = llm_api_key
+            effective_base_url = llm_base_url
+            extra_headers: Dict[str, str] = {}
 
-        # Convert SQL to Oracle format
-        oracle_sql = convert_sqlite_to_oracle_sql(sql)
-        question['oracle_SQL'] = oracle_sql
+            if llm_provider == "openrouter":
+                effective_api_key = effective_api_key or os.getenv("OPENROUTER_API_KEY")
+                effective_base_url = effective_base_url or "https://openrouter.ai/api/v1"
+                if not effective_api_key:
+                    raise RuntimeError("Missing OpenRouter API key. Pass --llm-api-key or set OPENROUTER_API_KEY.")
+                if llm_site_url:
+                    extra_headers["HTTP-Referer"] = llm_site_url
+                if llm_app_name:
+                    extra_headers["X-Title"] = llm_app_name
+            elif llm_provider == "groq":
+                effective_api_key = effective_api_key or os.getenv("GROQ_API_KEY")
+                effective_base_url = effective_base_url or "https://api.groq.com/openai/v1"
+                if not effective_api_key:
+                    raise RuntimeError("Missing Groq API key. Pass --llm-api-key or set GROQ_API_KEY.")
+            else:
+                effective_api_key = effective_api_key or os.getenv("OPENAI_API_KEY")
 
-        if (i + 1) % 100 == 0:
-            print(f"  Processed {i + 1} questions...")
+            batch_size = max(1, llm_batch_size)
+            for batch_start in range(0, len(questions), batch_size):
+                batch_end = min(batch_start + batch_size, len(questions))
+                sql_items = [
+                    (idx, questions[idx].get('SQL', ''))
+                    for idx in range(batch_start, batch_end)
+                ]
+                try:
+                    batch_result = extract_tables_with_columns_llm_openai_compat_batch(
+                        sql_items,
+                        model=llm_model,
+                        api_key=effective_api_key,
+                        base_url=effective_base_url,
+                        extra_headers=extra_headers or None,
+                    )
+                except Exception as exc:
+                    print(
+                        f"Warning: LLM batch extraction failed for indexes {batch_start}-{batch_end - 1} ({exc}); "
+                        "falling back to rule_based for this batch"
+                    )
+                    batch_result = {}
+
+                for idx, sql in sql_items:
+                    if idx in batch_result:
+                        questions[idx]['tables'] = batch_result[idx]
+                    else:
+                        questions[idx]['tables'] = extract_tables_with_columns(sql)
+
+                if batch_end % 100 == 0 or batch_end == len(questions):
+                    print(f"  Processed {batch_end} questions...")
+    else:
+        for i, question in enumerate(questions):
+            sql = question.get('SQL', '')
+            question['tables'] = extract_tables_with_columns(sql)
+            if (i + 1) % 100 == 0:
+                print(f"  Processed {i + 1} questions...")
+
+    for question in questions:
+        sql = question.get('SQL', '')
+        question['oracle_SQL'] = convert_sqlite_to_oracle_sql(sql)
 
     print(f"Writing output file: {output_path}")
 
@@ -694,6 +780,7 @@ def process_dev_file(
     print(f"  Average columns per question: {total_columns / len(questions):.2f}")
 
 
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -712,9 +799,25 @@ def main():
     parser.add_argument("--llm-base-url", default=None, help="Base URL for OpenAI-compatible endpoint")
     parser.add_argument(
         "--llm-provider",
-        choices=["openai_compat", "ollama"],
+        choices=["openai_compat", "openrouter", "groq", "ollama"],
         default="openai_compat",
-        help="LLM backend for --method llm. Use ollama for local open-source models.",
+        help="LLM backend for --method llm. Supports openai_compat, openrouter, groq, and ollama.",
+    )
+    parser.add_argument(
+        "--llm-site-url",
+        default=None,
+        help="Optional site URL for OpenRouter HTTP-Referer header.",
+    )
+    parser.add_argument(
+        "--llm-app-name",
+        default=None,
+        help="Optional app name for OpenRouter X-Title header.",
+    )
+    parser.add_argument(
+        "--llm-batch-size",
+        type=int,
+        default=35,
+        help="Number of questions sent in one LLM request for OpenAI-compatible providers.",
     )
     args = parser.parse_args()
 
@@ -727,6 +830,9 @@ def main():
         llm_api_key=args.llm_api_key,
         llm_base_url=args.llm_base_url,
         llm_provider=args.llm_provider,
+        llm_site_url=args.llm_site_url,
+        llm_app_name=args.llm_app_name,
+        llm_batch_size=args.llm_batch_size,
     )
 
 
