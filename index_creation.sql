@@ -182,7 +182,9 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_model_dir   IN VARCHAR2 DEFAULT 'ONNX_IMPORT',
     p_model_file  IN VARCHAR2 DEFAULT 'MiniLM.onnx',
     p_model_name  IN VARCHAR2 DEFAULT 'ALL_MINILM_L6',
-    p_vectorizer  IN VARCHAR2 DEFAULT 'VEC_MINILM_IVF'
+    p_vectorizer  IN VARCHAR2 DEFAULT 'VEC_MINILM_IVF',
+    p_create_obj_col_indexes IN BOOLEAN DEFAULT TRUE,
+    p_create_uni_index       IN BOOLEAN DEFAULT TRUE
   );
 
 -------------------------------------------------------------------------------
@@ -538,7 +540,9 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     p_model_dir   IN VARCHAR2 DEFAULT 'ONNX_IMPORT',
     p_model_file  IN VARCHAR2 DEFAULT 'MiniLM.onnx',
     p_model_name  IN VARCHAR2 DEFAULT 'ALL_MINILM_L6',
-    p_vectorizer  IN VARCHAR2 DEFAULT 'VEC_MINILM_IVF'
+    p_vectorizer  IN VARCHAR2 DEFAULT 'VEC_MINILM_IVF',
+    p_create_obj_col_indexes IN BOOLEAN DEFAULT TRUE,
+    p_create_uni_index       IN BOOLEAN DEFAULT TRUE
   ) IS
     l_params_obj  VARCHAR2(4000);
     l_params_col  VARCHAR2(4000);
@@ -634,39 +638,44 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     ctx_ddl.create_preference('UNI_DISCOVERY_WL', 'BASIC_WORDLIST');
 
     /* 5) Hybrid vector indexes (base column must be text -> DUMMY) */
-    safe_exec('DROP INDEX obj_discovery_hvix');
-    safe_exec('DROP INDEX col_discovery_hvix');
-    safe_exec('DROP INDEX uni_discovery_hvix');
+    IF p_create_obj_col_indexes THEN
+      safe_exec('DROP INDEX obj_discovery_hvix');
+      safe_exec('DROP INDEX col_discovery_hvix');
 
-    l_params_obj :=
-      'VECTORIZER '    || p_vectorizer       || ' ' ||
-      'DATASTORE '     || 'OBJ_DISCOVERY_DS' || ' ' ||
-      'WORDLIST '      || 'OBJ_DISCOVERY_WL' || ' ' ||
-      'SECTION GROUP ' || 'OBJ_DISCOVERY_SG';
+      l_params_obj :=
+        'VECTORIZER '    || p_vectorizer       || ' ' ||
+        'DATASTORE '     || 'OBJ_DISCOVERY_DS' || ' ' ||
+        'WORDLIST '      || 'OBJ_DISCOVERY_WL' || ' ' ||
+        'SECTION GROUP ' || 'OBJ_DISCOVERY_SG';
 
-    EXECUTE IMMEDIATE
-      'CREATE HYBRID VECTOR INDEX obj_discovery_hvix ON all_objects_search_text(dummy) ' ||
-      'PARAMETERS(''' || l_params_obj || ''')';
+      EXECUTE IMMEDIATE
+        'CREATE HYBRID VECTOR INDEX obj_discovery_hvix ON all_objects_search_text(dummy) ' ||
+        'PARAMETERS(''' || l_params_obj || ''')';
 
-    l_params_col :=
-      'VECTORIZER '    || p_vectorizer       || ' ' ||
-      'DATASTORE '     || 'COL_DISCOVERY_DS' || ' ' ||
-      'WORDLIST '      || 'COL_DISCOVERY_WL' || ' ' ||
-      'SECTION GROUP ' || 'COL_DISCOVERY_SG';
+      l_params_col :=
+        'VECTORIZER '    || p_vectorizer       || ' ' ||
+        'DATASTORE '     || 'COL_DISCOVERY_DS' || ' ' ||
+        'WORDLIST '      || 'COL_DISCOVERY_WL' || ' ' ||
+        'SECTION GROUP ' || 'COL_DISCOVERY_SG';
 
-    EXECUTE IMMEDIATE
-      'CREATE HYBRID VECTOR INDEX col_discovery_hvix ON all_cols_search_text(dummy) ' ||
-      'PARAMETERS(''' || l_params_col || ''')';
+      EXECUTE IMMEDIATE
+        'CREATE HYBRID VECTOR INDEX col_discovery_hvix ON all_cols_search_text(dummy) ' ||
+        'PARAMETERS(''' || l_params_col || ''')';
+    END IF;
 
-    l_params_uni :=
-      'VECTORIZER '    || p_vectorizer       || ' ' ||
-      'DATASTORE '     || 'UNI_DISCOVERY_DS' || ' ' ||
-      'WORDLIST '      || 'UNI_DISCOVERY_WL' || ' ' ||
-      'SECTION GROUP ' || 'UNI_DISCOVERY_SG';
+    IF p_create_uni_index THEN
+      safe_exec('DROP INDEX uni_discovery_hvix');
 
-    EXECUTE IMMEDIATE
-      'CREATE HYBRID VECTOR INDEX uni_discovery_hvix ON all_unified_search_text(dummy) ' ||
-      'PARAMETERS(''' || l_params_uni || ''')';
+      l_params_uni :=
+        'VECTORIZER '    || p_vectorizer       || ' ' ||
+        'DATASTORE '     || 'UNI_DISCOVERY_DS' || ' ' ||
+        'WORDLIST '      || 'UNI_DISCOVERY_WL' || ' ' ||
+        'SECTION GROUP ' || 'UNI_DISCOVERY_SG';
+
+      EXECUTE IMMEDIATE
+        'CREATE HYBRID VECTOR INDEX uni_discovery_hvix ON all_unified_search_text(dummy) ' ||
+        'PARAMETERS(''' || l_params_uni || ''')';
+    END IF;
 
   END setup_hybrid_search;
 
