@@ -41,6 +41,15 @@ from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
 
 try:
+    import nltk
+    from nltk.corpus import stopwords
+    from nltk.tokenize import word_tokenize
+except Exception:
+    nltk = None
+    stopwords = None
+    word_tokenize = None
+
+try:
     import oracledb
 except ImportError:
     print("Error: python-oracledb is required. Install with: pip install oracledb")
@@ -107,6 +116,20 @@ class DiscoveryConfig:
     alpha: float = 0.65
     parallel_alpha: float = 0.60
     unified_score_threshold: float = 0.60
+
+    # Search behavior
+    search_type: str = 'vector'  # vector | hybrid
+
+    # Hybrid-only knobs (defaults mirror index_creation.sql)
+    search_scorer: str = 'RSF'
+    search_fusion: str = 'UNION'
+    vector_search_mode: str = 'DOCUMENT'
+    vector_aggregator: str = 'MAX'
+    vector_score_weight: float = 1.0
+    vector_rank_penalty: float = 5.0
+    text_contains: Optional[str] = None
+    text_score_weight: float = 10.0
+    text_rank_penalty: float = 1.0
 
 
 @dataclass
@@ -252,6 +275,61 @@ class DatabaseSummary:
 # ============================================================================
 # Oracle Database Operations
 # ============================================================================
+
+_NLTK_READY = False
+
+def build_text_contains_from_query(text: str) -> Optional[str]:
+    """Build Oracle CONTAINS clause text using NLTK keyword extraction."""
+    global _NLTK_READY
+
+    if not text:
+        return None
+
+    # Preferred path: NLTK tokenization + English stop words
+    if nltk is not None and stopwords is not None and word_tokenize is not None:
+        try:
+            if not _NLTK_READY:
+                nltk.download('punkt', quiet=True)
+                nltk.download('stopwords', quiet=True)
+                nltk.download('punkt_tab', quiet=True)
+                _NLTK_READY = True
+
+            tokens = word_tokenize(text)
+            stop_words = set(stopwords.words('english'))
+            keywords = [w.lower() for w in tokens if w.isalpha() and w.lower() not in stop_words]
+
+            # preserve appearance order while deduplicating
+            seen = set()
+            ordered = []
+            for k in keywords:
+                if k not in seen:
+                    seen.add(k)
+                    ordered.append(k.upper())
+
+            return ' OR '.join(ordered) if ordered else None
+        except Exception:
+            pass
+
+    # Fallback when NLTK/resources are unavailable
+    fallback_stop = {
+        'a','an','the','and','or','but','if','then','else','when','at','by','for','with','about','against','between',
+        'into','through','during','before','after','above','below','to','from','up','down','in','out','on','off','over',
+        'under','again','further','than','once','here','there','all','any','both','each','few','more','most','other',
+        'some','such','no','nor','not','only','own','same','so','too','very','can','will','just','should','now','of',
+        'is','are','was','were','be','been','being','have','has','had','do','does','did','as','it','its','their','them',
+        'they','this','that','these','those','what','which','who','whom','why','how','please','list'
+    }
+    words = re.findall(r'[A-Za-z]+', text)
+    seen = set()
+    ordered = []
+    for w in words:
+        wl = w.lower()
+        if wl in fallback_stop:
+            continue
+        if wl not in seen:
+            seen.add(wl)
+            ordered.append(wl.upper())
+    return ' OR '.join(ordered) if ordered else None
 
 class OracleManager:
     """Manages Oracle database connections and operations."""
@@ -722,7 +800,13 @@ class OracleManager:
                          hints: Optional[str] = None, n: Optional[int] = None,
                          m: Optional[int] = None, alpha: float = 0.65,
                          parallel_alpha: float = 0.60,
-                         unified_score_threshold: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
+                         unified_score_threshold: float = 0.60,
+                         search_type: str = 'vector',
+                         search_scorer: str = 'RSF', search_fusion: str = 'UNION',
+                         vector_search_mode: str = 'DOCUMENT', vector_aggregator: str = 'MAX',
+                         vector_score_weight: float = 1.0, vector_rank_penalty: float = 5.0,
+                         text_contains: Optional[str] = None,
+                         text_score_weight: float = 10.0, text_rank_penalty: float = 1.0) -> Tuple[Optional[List[DiscoveredObject]], float]:
         """
         Call developer.discover_objects() and return results.
 
@@ -754,35 +838,79 @@ class OracleManager:
             start_time = time.perf_counter()
 
             # Call the procedure
+            use_hybrid = (search_type or 'vector').lower() == 'hybrid'
+            effective_text_contains = text_contains
+            if use_hybrid and not effective_text_contains:
+                effective_text_contains = build_text_contains_from_query(query)
+
             if discovery_mode == 'parallel':
-                cursor.callproc('developer.discover_objects_parallel', [
+                proc_args = [
                     query,          # p_query
                     hints,          # p_hints
                     k,              # p_k
                     m,              # p_m
                     cols_per_obj,   # p_cols_per_obj
                     parallel_alpha, # p_alpha
-                    result_json     # p_result_json (OUT)
-                ])
+                ]
+                if use_hybrid:
+                    proc_args.extend([
+                        search_scorer,
+                        search_fusion,
+                        vector_search_mode,
+                        vector_aggregator,
+                        vector_score_weight,
+                        vector_rank_penalty,
+                        effective_text_contains,
+                        text_score_weight,
+                        text_rank_penalty,
+                    ])
+                proc_args.append(result_json)  # p_result_json (OUT)
+                cursor.callproc('developer.discover_objects_parallel', proc_args)
             elif discovery_mode == 'unified':
-                cursor.callproc('developer.discover_objects_unified', [
+                proc_args = [
                     query,                   # p_query
                     k,                       # p_k
                     n,                       # p_n
                     cols_per_obj,            # p_cols_per_obj
                     unified_score_threshold, # p_score_threshold
-                    result_json              # p_result_json (OUT)
-                ])
+                ]
+                if use_hybrid:
+                    proc_args.extend([
+                        search_scorer,
+                        search_fusion,
+                        vector_search_mode,
+                        vector_aggregator,
+                        vector_score_weight,
+                        vector_rank_penalty,
+                        effective_text_contains,
+                        text_score_weight,
+                        text_rank_penalty,
+                    ])
+                proc_args.append(result_json)  # p_result_json (OUT)
+                cursor.callproc('developer.discover_objects_unified', proc_args)
             else:
-                cursor.callproc('developer.discover_objects', [
+                proc_args = [
                     query,      # p_query
                     k,          # p_k
                     k0,         # p_k0
                     n,          # p_n
                     cols_per_obj,  # p_cols_per_obj
                     alpha,      # p_alpha
-                    result_json # p_result_json (OUT)
-                ])
+                ]
+                if use_hybrid:
+                    proc_args.extend([
+                        search_scorer,
+                        search_fusion,
+                        vector_search_mode,
+                        vector_aggregator,
+                        vector_score_weight,
+                        vector_rank_penalty,
+                        effective_text_contains,
+                        text_score_weight,
+                        text_rank_penalty,
+                    ])
+                proc_args.append(result_json)  # p_result_json (OUT)
+                cursor.callproc('developer.discover_objects', proc_args)
 
             end_time = time.perf_counter()
             execution_time_ms = (end_time - start_time) * 1000
@@ -820,7 +948,13 @@ class OracleManager:
 
     def infer_objects_unified(self, query: str, k: int = 10, n: Optional[int] = None,
                               cols_per_obj: int = 5,
-                              score_threshold: float = 0.60) -> Tuple[Optional[List[DiscoveredObject]], float]:
+                              score_threshold: float = 0.60,
+                              search_type: str = 'vector',
+                              search_scorer: str = 'RSF', search_fusion: str = 'UNION',
+                              vector_search_mode: str = 'DOCUMENT', vector_aggregator: str = 'MAX',
+                              vector_score_weight: float = 1.0, vector_rank_penalty: float = 5.0,
+                              text_contains: Optional[str] = None,
+                              text_score_weight: float = 10.0, text_rank_penalty: float = 1.0) -> Tuple[Optional[List[DiscoveredObject]], float]:
         """Infer objects using developer.discover_objects_unified()."""
         return self.discover_objects(
             query=query,
@@ -828,7 +962,17 @@ class OracleManager:
             n=n,
             cols_per_obj=cols_per_obj,
             discovery_mode='unified',
-            unified_score_threshold=score_threshold
+            unified_score_threshold=score_threshold,
+            search_type=search_type,
+            search_scorer=search_scorer,
+            search_fusion=search_fusion,
+            vector_search_mode=vector_search_mode,
+            vector_aggregator=vector_aggregator,
+            vector_score_weight=vector_score_weight,
+            vector_rank_penalty=vector_rank_penalty,
+            text_contains=text_contains,
+            text_score_weight=text_score_weight,
+            text_rank_penalty=text_rank_penalty,
         )
 
     def drop_user(self, username: str) -> bool:
@@ -2492,6 +2636,16 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                     n=cfg.n,
                     cols_per_obj=cfg.cols_per_obj,
                     score_threshold=cfg.unified_score_threshold,
+                    search_type=cfg.search_type,
+                    search_scorer=cfg.search_scorer,
+                    search_fusion=cfg.search_fusion,
+                    vector_search_mode=cfg.vector_search_mode,
+                    vector_aggregator=cfg.vector_aggregator,
+                    vector_score_weight=cfg.vector_score_weight,
+                    vector_rank_penalty=cfg.vector_rank_penalty,
+                    text_contains=cfg.text_contains,
+                    text_score_weight=cfg.text_score_weight,
+                    text_rank_penalty=cfg.text_rank_penalty,
                 )
             else:
                 discovered, exec_time = oracle_mgr.discover_objects(
@@ -2506,6 +2660,16 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                     alpha=cfg.alpha,
                     parallel_alpha=cfg.parallel_alpha,
                     unified_score_threshold=cfg.unified_score_threshold,
+                    search_type=cfg.search_type,
+                    search_scorer=cfg.search_scorer,
+                    search_fusion=cfg.search_fusion,
+                    vector_search_mode=cfg.vector_search_mode,
+                    vector_aggregator=cfg.vector_aggregator,
+                    vector_score_weight=cfg.vector_score_weight,
+                    vector_rank_penalty=cfg.vector_rank_penalty,
+                    text_contains=cfg.text_contains,
+                    text_score_weight=cfg.text_score_weight,
+                    text_rank_penalty=cfg.text_rank_penalty,
                 )
 
             result.execution_time_ms = exec_time
@@ -2697,7 +2861,9 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
 
     if args.discover_config_json:
         raw = json.loads(args.discover_config_json)
-        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha', 'unified_score_threshold']:
+        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha', 'unified_score_threshold',
+                    'search_type', 'search_scorer', 'search_fusion', 'vector_search_mode', 'vector_aggregator',
+                    'vector_score_weight', 'vector_rank_penalty', 'text_contains', 'text_score_weight', 'text_rank_penalty']:
             if key in raw:
                 setattr(cfg, key, raw[key])
 
@@ -2717,6 +2883,26 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
         cfg.parallel_alpha = args.discover_parallel_alpha
     if args.discover_unified_score_threshold is not None:
         cfg.unified_score_threshold = args.discover_unified_score_threshold
+
+    cfg.search_type = args.search_type
+    if args.discover_search_scorer is not None:
+        cfg.search_scorer = args.discover_search_scorer
+    if args.discover_search_fusion is not None:
+        cfg.search_fusion = args.discover_search_fusion
+    if args.discover_vector_search_mode is not None:
+        cfg.vector_search_mode = args.discover_vector_search_mode
+    if args.discover_vector_aggregator is not None:
+        cfg.vector_aggregator = args.discover_vector_aggregator
+    if args.discover_vector_score_weight is not None:
+        cfg.vector_score_weight = args.discover_vector_score_weight
+    if args.discover_vector_rank_penalty is not None:
+        cfg.vector_rank_penalty = args.discover_vector_rank_penalty
+    if args.discover_text_contains is not None:
+        cfg.text_contains = args.discover_text_contains
+    if args.discover_text_score_weight is not None:
+        cfg.text_score_weight = args.discover_text_score_weight
+    if args.discover_text_rank_penalty is not None:
+        cfg.text_rank_penalty = args.discover_text_rank_penalty
 
     return cfg
 
@@ -2817,6 +3003,12 @@ def main():
         default='sequential',
         help='Discovery mode: sequential, parallel, or unified (default: sequential)'
     )
+    parser.add_argument(
+        '--search-type',
+        choices=['vector', 'hybrid'],
+        default='vector',
+        help='Search request style sent to developer package (default: vector). Use hybrid to include vector+keyword fields.'
+    )
 
     discover_group = parser.add_argument_group('Discovery settings')
     discover_group.add_argument(
@@ -2832,6 +3024,15 @@ def main():
     discover_group.add_argument('--discover-alpha', type=float, default=None, help='Sequential score blend alpha')
     discover_group.add_argument('--discover-parallel-alpha', type=float, default=None, help='Parallel score blend alpha')
     discover_group.add_argument('--discover-unified-score-threshold', type=float, default=None, help='Unified mode score threshold [0,1]')
+    discover_group.add_argument('--discover-search-scorer', type=str, default=None, help='Hybrid search_scorer (e.g. RSF, RRF, WRRF)')
+    discover_group.add_argument('--discover-search-fusion', type=str, default=None, help='Hybrid search_fusion (e.g. UNION, INTERSECT, RERANK)')
+    discover_group.add_argument('--discover-vector-search-mode', type=str, default=None, help='Hybrid vector.search_mode (DOCUMENT or CHUNK)')
+    discover_group.add_argument('--discover-vector-aggregator', type=str, default=None, help='Hybrid vector.aggregator (e.g. MAX, AVG)')
+    discover_group.add_argument('--discover-vector-score-weight', type=float, default=None, help='Hybrid vector.score_weight')
+    discover_group.add_argument('--discover-vector-rank-penalty', type=float, default=None, help='Hybrid vector.rank_penalty')
+    discover_group.add_argument('--discover-text-contains', type=str, default=None, help='Hybrid text.contains override; auto-generated from query when omitted')
+    discover_group.add_argument('--discover-text-score-weight', type=float, default=None, help='Hybrid text.score_weight')
+    discover_group.add_argument('--discover-text-rank-penalty', type=float, default=None, help='Hybrid text.rank_penalty')
 
     args = parser.parse_args()
 
@@ -2965,6 +3166,16 @@ def main():
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
             'mode': args.mode,
+            'search_type': discover_cfg.search_type,
+            'discover_search_scorer': discover_cfg.search_scorer,
+            'discover_search_fusion': discover_cfg.search_fusion,
+            'discover_vector_search_mode': discover_cfg.vector_search_mode,
+            'discover_vector_aggregator': discover_cfg.vector_aggregator,
+            'discover_vector_score_weight': discover_cfg.vector_score_weight,
+            'discover_vector_rank_penalty': discover_cfg.vector_rank_penalty,
+            'discover_text_contains': discover_cfg.text_contains or 'auto',
+            'discover_text_score_weight': discover_cfg.text_score_weight,
+            'discover_text_rank_penalty': discover_cfg.text_rank_penalty,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
 
