@@ -181,6 +181,7 @@ Then open `http://localhost:8000/report.html` in your browser.
 | `--single-user-mode` | | false | Load all selected schemas into one Oracle user and run all queries there |
 | `--single-user-name` | | `BIRD_ALL` | Username for `--single-user-mode` (password is the same as username) |
 | `--mode` | sequential\|parallel\|unified | sequential | Select discovery procedure (`discover_objects`, `discover_objects_parallel`, or `discover_objects_unified`) |
+| `--search-type` | vector\|hybrid | vector | Request shape sent to package. `vector` keeps legacy args; `hybrid` sends vector+keyword args |
 
 ### Discovery Argument Group
 
@@ -196,6 +197,20 @@ You can now provide discovery procedure arguments as a grouped JSON config and/o
 | `--discover-cols-per-obj` | 5 | Max columns attached per object |
 | `--discover-alpha` | 0.65 | Sequential rerank blend alpha (`p_alpha`) |
 | `--discover-parallel-alpha` | 0.60 | Parallel rerank blend alpha (`p_alpha`) |
+| `--discover-unified-score-threshold` | 0.60 | Unified mode score threshold |
+| `--discover-search-scorer` | RSF | Hybrid `search_scorer` |
+| `--discover-search-fusion` | UNION | Hybrid `search_fusion` |
+| `--discover-vector-search-mode` | DOCUMENT | Hybrid `vector.search_mode` |
+| `--discover-vector-aggregator` | MAX | Hybrid `vector.aggregator` |
+| `--discover-vector-score-weight` | 1 | Hybrid `vector.score_weight` |
+| `--discover-vector-rank-penalty` | 5 | Hybrid `vector.rank_penalty` |
+| `--discover-text-contains` | auto | Hybrid `text.contains` override |
+| `--discover-text-score-weight` | 10 | Hybrid `text.score_weight` |
+| `--discover-text-rank-penalty` | 1 | Hybrid `text.rank_penalty` |
+
+`--discover-text-contains` auto behavior: when `--search-type hybrid` is used and this
+flag is omitted, the runner generates keywords from the query text via Python NLTK
+(`word_tokenize`, English stopwords filtering, `isalpha`, dedupe, joined with `OR`).
 
 Override precedence: explicit CLI flags > `--discover-config-json` > built-in defaults.
 

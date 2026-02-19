@@ -8,3 +8,6 @@ oracledb>=2.0.0
 
 # CSV processing (built-in, but listed for reference)
 # csv - standard library
+
+# Keyword extraction for hybrid text.contains auto-generation
+nltk>=3.8

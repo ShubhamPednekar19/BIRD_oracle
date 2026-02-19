@@ -303,7 +303,16 @@ Optional dependencies:
 
 ## Hybrid Search Evaluation
 
-Use `run_hybrid_search_evaluation.py` for Oracle hybrid discovery benchmarking with sequential or parallel discovery modes.
+Use `run_hybrid_search_evaluation.py` for Oracle metadata discovery benchmarking with sequential, parallel, or unified modes.
+
+The runner now supports two request styles:
+
+- `--search-type vector` (default): sends legacy vector-style procedure arguments
+- `--search-type hybrid`: sends hybrid vector+keyword arguments (scorer/fusion/vector/text knobs)
+
+When running with `--search-type hybrid`, if `--discover-text-contains` is not provided,
+the runner auto-generates `text.contains` keywords from the NL query in Python using NLTK
+tokenization + stopword filtering and joins terms with `OR`.
 
 Example with parallel mode and grouped discovery config:
 
@@ -311,7 +320,20 @@ Example with parallel mode and grouped discovery config:
 python run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --mode parallel \
+  --search-type hybrid \
   --discover-config-json '{"k":10,"m":80,"cols_per_obj":5,"parallel_alpha":0.60}'
 ```
+
+Optional hybrid tuning flags:
+
+- `--discover-search-scorer`
+- `--discover-search-fusion`
+- `--discover-vector-search-mode`
+- `--discover-vector-aggregator`
+- `--discover-vector-score-weight`
+- `--discover-vector-rank-penalty`
+- `--discover-text-contains`
+- `--discover-text-score-weight`
+- `--discover-text-rank-penalty`
 
 The generated HTML/CSV reports include additional @K metrics (Recall, Precision, F1) for both table and column evaluation.

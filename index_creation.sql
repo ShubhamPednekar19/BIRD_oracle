@@ -213,6 +213,15 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_n             IN  PLS_INTEGER DEFAULT NULL,
     p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
     p_alpha         IN  NUMBER      DEFAULT 0.65,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json   OUT JSON
   );
 
@@ -242,6 +251,15 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_m             IN  PLS_INTEGER DEFAULT NULL,
     p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
     p_alpha         IN  NUMBER      DEFAULT 0.60,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json   OUT JSON
   );
 
@@ -272,6 +290,15 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_m                IN  PLS_INTEGER DEFAULT 10,
     p_cols_per_obj     IN  PLS_INTEGER DEFAULT 10,
     p_score_threshold  IN  NUMBER      DEFAULT 0.6,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json      OUT JSON
   );
 
@@ -279,6 +306,42 @@ END developer;
 /
 
 CREATE OR REPLACE PACKAGE BODY developer AS
+
+  PROCEDURE apply_hybrid_search_params(
+    p_req IN OUT NOCOPY JSON_OBJECT_T,
+    p_query IN CLOB,
+    p_search_scorer IN VARCHAR2,
+    p_search_fusion IN VARCHAR2,
+    p_vector_search_mode IN VARCHAR2,
+    p_vector_aggregator IN VARCHAR2,
+    p_vector_score_weight IN NUMBER,
+    p_vector_rank_penalty IN NUMBER,
+    p_text_contains IN CLOB,
+    p_text_score_weight IN NUMBER,
+    p_text_rank_penalty IN NUMBER
+  ) IS
+    l_vector JSON_OBJECT_T := JSON_OBJECT_T();
+    l_text JSON_OBJECT_T := JSON_OBJECT_T();
+    l_contains CLOB;
+  BEGIN
+    p_req.put('search_scorer', UPPER(NVL(p_search_scorer, 'RSF')));
+    p_req.put('search_fusion', UPPER(NVL(p_search_fusion, 'UNION')));
+
+    l_vector.put('search_text', p_query);
+    l_vector.put('search_mode', UPPER(NVL(p_vector_search_mode, 'DOCUMENT')));
+    l_vector.put('aggregator', UPPER(NVL(p_vector_aggregator, 'MAX')));
+    l_vector.put('score_weight', NVL(p_vector_score_weight, 1));
+    l_vector.put('rank_penalty', NVL(p_vector_rank_penalty, 5));
+    p_req.put('vector', l_vector);
+
+    l_contains := p_text_contains;
+    IF l_contains IS NOT NULL THEN
+      l_text.put('contains', l_contains);
+    END IF;
+    l_text.put('score_weight', NVL(p_text_score_weight, 10));
+    l_text.put('rank_penalty', NVL(p_text_rank_penalty, 1));
+    p_req.put('text', l_text);
+  END apply_hybrid_search_params;
 
   /* ------------------------------------------------------------------------ */
   /* Utility: best-effort drop helper (ignore not-exists)                      */
@@ -617,6 +680,15 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     p_n             IN  PLS_INTEGER DEFAULT NULL,
     p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
     p_alpha         IN  NUMBER      DEFAULT 0.65,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json   OUT JSON
   ) IS
     c_obj_index CONSTANT VARCHAR2(128) := 'OBJ_DISCOVERY_HVIX';
@@ -687,7 +759,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       ret.put('values', vals);
 
       req.put('hybrid_index_name', c_obj_index);
-      req.put('search_text', p_query);
+      apply_hybrid_search_params(
+        req, p_query, p_search_scorer, p_search_fusion,
+        p_vector_search_mode, p_vector_aggregator,
+        p_vector_score_weight, p_vector_rank_penalty,
+        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      );
       req.put('return', ret);
 
       l_obj_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
@@ -755,7 +832,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       ret.put('values', vals);
 
       req.put('hybrid_index_name', c_col_index);
-      req.put('search_text', p_query);
+      apply_hybrid_search_params(
+        req, p_query, p_search_scorer, p_search_fusion,
+        p_vector_search_mode, p_vector_aggregator,
+        p_vector_score_weight, p_vector_rank_penalty,
+        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      );
       req.put('filter_by', fb);
       req.put('return', ret);
 
@@ -913,6 +995,15 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     p_m             IN  PLS_INTEGER DEFAULT NULL,
     p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
     p_alpha         IN  NUMBER      DEFAULT 0.60,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json   OUT JSON
   ) IS
     c_obj_index CONSTANT VARCHAR2(128) := 'OBJ_DISCOVERY_HVIX';
@@ -987,7 +1078,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       ret_obj.put('values', return_vals); 
       ret_obj.put('topN', l_k);
       req.put('hybrid_index_name', c_obj_index);
-      req.put('search_text', p_query);
+      apply_hybrid_search_params(
+        req, p_query, p_search_scorer, p_search_fusion,
+        p_vector_search_mode, p_vector_aggregator,
+        p_vector_score_weight, p_vector_rank_penalty,
+        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      );
       req.put('return', ret_obj);
       l_obj_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
     END;
@@ -1035,7 +1131,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       ret_obj.put('values', return_vals); 
       ret_obj.put('topN', l_m);
       req.put('hybrid_index_name', c_col_index);
-      req.put('search_text', p_query);
+      apply_hybrid_search_params(
+        req, p_query, p_search_scorer, p_search_fusion,
+        p_vector_search_mode, p_vector_aggregator,
+        p_vector_score_weight, p_vector_rank_penalty,
+        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      );
       req.put('return', ret_obj);
       l_col_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
     END;
@@ -1211,6 +1312,15 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     p_m                IN  PLS_INTEGER DEFAULT 10,
     p_cols_per_obj     IN  PLS_INTEGER DEFAULT 10,
     p_score_threshold  IN  NUMBER      DEFAULT 0.6,
+    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
+    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
+    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
+    p_vector_score_weight IN NUMBER   DEFAULT 1,
+    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
+    p_text_contains       IN CLOB     DEFAULT NULL,
+    p_text_score_weight   IN NUMBER   DEFAULT 10,
+    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
     p_result_json      OUT JSON
   ) IS
     c_uni_index CONSTANT VARCHAR2(128) := 'UNI_DISCOVERY_HVIX';
@@ -1282,7 +1392,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       ret.put('values', vals);
 
       req.put('hybrid_index_name', c_uni_index);
-      req.put('search_text', p_query);
+      apply_hybrid_search_params(
+        req, p_query, p_search_scorer, p_search_fusion,
+        p_vector_search_mode, p_vector_aggregator,
+        p_vector_score_weight, p_vector_rank_penalty,
+        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      );
       req.put('return', ret);
 
       l_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
