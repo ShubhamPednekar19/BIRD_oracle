@@ -775,16 +775,27 @@ class OracleManager:
                 print(f"    Warning: refresh_data failed: {error_str[:200]}")
             return False
 
-    def call_setup_hybrid_search(self) -> bool:
-        """Call developer.setup_hybrid_search() to create indexes."""
+    def call_setup_hybrid_search(self, discovery_mode: str = 'sequential') -> bool:
+        """Call developer.setup_hybrid_search() and create only required indexes."""
         if not self.user_connection:
             return False
 
         try:
             cursor = self.user_connection.cursor()
-            cursor.callproc('developer.setup_hybrid_search')
+            create_obj_col_indexes = discovery_mode in ('sequential', 'parallel')
+            create_uni_index = discovery_mode == 'unified'
+            cursor.callproc(
+                'developer.setup_hybrid_search',
+                keyword_parameters={
+                    'p_create_obj_col_indexes': create_obj_col_indexes,
+                    'p_create_uni_index': create_uni_index,
+                }
+            )
             self.user_connection.commit()
-            print(f"    Called developer.setup_hybrid_search()")
+            print(
+                "    Called developer.setup_hybrid_search() "
+                f"[obj+col={create_obj_col_indexes}, unified={create_uni_index}]"
+            )
             return True
         except oracledb.DatabaseError as e:
             error_str = str(e)
@@ -2562,7 +2573,7 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
     # Step 5: Call refresh_data and setup_hybrid_search (only if package was installed)
     if package_installed:
         refresh_ok = oracle_mgr.call_refresh_data()
-        setup_ok = oracle_mgr.call_setup_hybrid_search()
+        setup_ok = oracle_mgr.call_setup_hybrid_search(discovery_mode)
         if not refresh_ok and not setup_ok:
             print(f"  Note: developer package not available, skipping hybrid search setup")
     else:
@@ -2825,7 +2836,7 @@ def process_databases_single_user(
     package_installed = oracle_mgr.execute_index_creation(index_script)
     if package_installed:
         refresh_ok = oracle_mgr.call_refresh_data()
-        setup_ok = oracle_mgr.call_setup_hybrid_search()
+        setup_ok = oracle_mgr.call_setup_hybrid_search(discovery_mode)
         if not refresh_ok and not setup_ok:
             print("  Note: developer package not available, skipping hybrid search setup")
     else:
@@ -3181,9 +3192,14 @@ def main():
 
         html_content = generate_results_html(all_results, all_summaries, run_params)
 
-        with open(args.html, 'w', encoding='utf-8') as f:
+        html_path = Path(args.html)
+        if not html_path.is_absolute():
+            html_path = Path.cwd() / html_path
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
-        print(f"HTML report written to: {args.html}")
+        print(f"HTML report written to: {html_path}")
 
         # Print overall summary
         print(f"\n{'='*60}")
@@ -3211,9 +3227,12 @@ def main():
         start_results_server(html_content, port=args.port)
 
     # Start local server if requested (after DB cleanup)
-    if args.serve and args.html and os.path.isfile(args.html):
-        html_dir = os.path.dirname(os.path.abspath(args.html))
-        start_local_server(html_dir, args.port)
+    if args.serve and args.html:
+        html_path = Path(args.html)
+        if not html_path.is_absolute():
+            html_path = Path.cwd() / html_path
+        if html_path.is_file():
+            start_local_server(str(html_path.parent), args.port)
 
     return 0
 
