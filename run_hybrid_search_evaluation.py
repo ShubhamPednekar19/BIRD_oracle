@@ -296,7 +296,7 @@ def build_text_contains_from_query(text: str) -> Optional[str]:
 
             tokens = word_tokenize(text)
             stop_words = set(stopwords.words('english'))
-            keywords = [w.lower() for w in tokens if w.isalpha() and w.lower() not in stop_words]
+            keywords = [w.lower() for w in tokens if w.isalpha() and w.lower() not in stop_words and 'tr' not in w.lower()]
 
             # preserve appearance order while deduplicating
             seen = set()
@@ -317,7 +317,7 @@ def build_text_contains_from_query(text: str) -> Optional[str]:
         'under','again','further','than','once','here','there','all','any','both','each','few','more','most','other',
         'some','such','no','nor','not','only','own','same','so','too','very','can','will','just','should','now','of',
         'is','are','was','were','be','been','being','have','has','had','do','does','did','as','it','its','their','them',
-        'they','this','that','these','those','what','which','who','whom','why','how','please','list'
+        'they','this','that','these','those','what','which','who','whom','why','how','please','list', 'tr'
     }
     words = re.findall(r'[A-Za-z]+', text)
     seen = set()
@@ -808,7 +808,7 @@ class OracleManager:
 
     def discover_objects(self, query: str, k: int = 10, k0: int = 50,
                          cols_per_obj: int = 3, discovery_mode: str = 'sequential',
-                         hints: Optional[str] = None, n: Optional[int] = None,
+                         hints: Optional[str] = None, n: int = 10,
                          m: Optional[int] = None, alpha: float = 0.65,
                          parallel_alpha: float = 0.60,
                          unified_score_threshold: float = 0.60,
@@ -884,20 +884,17 @@ class OracleManager:
                     n,                       # p_n
                     cols_per_obj,            # p_cols_per_obj
                     unified_score_threshold, # p_score_threshold
+                    search_scorer,
+                    search_fusion,
+                    vector_search_mode,
+                    vector_aggregator,
+                    vector_score_weight,
+                    vector_rank_penalty,
+                    effective_text_contains,
+                    text_score_weight,
+                    text_rank_penalty,
+                    result_json
                 ]
-                if use_hybrid:
-                    proc_args.extend([
-                        search_scorer,
-                        search_fusion,
-                        vector_search_mode,
-                        vector_aggregator,
-                        vector_score_weight,
-                        vector_rank_penalty,
-                        effective_text_contains,
-                        text_score_weight,
-                        text_rank_penalty,
-                    ])
-                proc_args.append(result_json)  # p_result_json (OUT)
                 cursor.callproc('developer.discover_objects_unified', proc_args)
             else:
                 proc_args = [
