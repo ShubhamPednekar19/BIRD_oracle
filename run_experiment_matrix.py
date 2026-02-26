@@ -14,10 +14,21 @@ import json
 
 def _load_config(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8")
+    # Keep the config dependency-free: allow comment-only lines (starting with '#')
+    # and parse the remaining content as JSON-formatted YAML.
+    filtered_lines = []
+    for line in raw.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        filtered_lines.append(line)
+    cleaned = "\n".join(filtered_lines).strip()
+
     try:
-        data = json.loads(raw)
+        data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise ValueError("Config must be JSON-formatted YAML (YAML 1.2 compatible).") from exc
+        raise ValueError(
+            "Config parse failed. Use JSON-formatted YAML and comment-only lines that start with '#'."
+        ) from exc
     if not isinstance(data, dict):
         raise ValueError("Config root must be a mapping/object.")
     return data

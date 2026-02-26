@@ -120,6 +120,15 @@ Dry run (print commands only):
 python run_experiment_matrix.py --config experiment_matrix.yaml --dry-run
 ```
 
+Config tips for beginners:
+- `experiment_matrix.yaml` supports **comment-only** lines that start with `#`.
+- To run multiple values for a field, put them in a list. Example:
+  - `"modes": ["unified", "parallel"]`
+  - `"search_types": ["vector", "hybrid"]`
+  - `"dataset_forms": ["single-user", "multiple"]`
+- To pass extra arguments to every run, use `passthrough_args`, e.g.
+  `"passthrough_args": ["--max-questions", "100"]`.
+
 Folder layout produced under `results/`:
 
 ```text
