@@ -1,0 +1,23 @@
+{
+  "connection_string": "xxx",
+  "modes": ["unified", "parallel"],
+  "search_types": ["vector", "hybrid"],
+  "hybrid_scorers": ["RSF", "RRF"],
+  "dataset_forms": ["single-user", "multiple"],
+  "common": {
+    "discover_k": 10,
+    "discover_score_threshold": 0.60
+  },
+  "scorer_overrides": {
+    "RSF": {
+      "discover_vector_score_weight": 10,
+      "discover_text_score_weight": 2
+    },
+    "RRF": {
+      "discover_vector_rank_penalty": 2,
+      "discover_text_rank_penalty": 1
+    }
+  },
+  "results_root": "results",
+  "passthrough_args": []
+}

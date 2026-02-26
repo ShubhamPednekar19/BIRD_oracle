@@ -105,6 +105,46 @@ python run_hybrid_search_evaluation.py \
 
 ### HTML Report Output
 
+
+### YAML-Driven Experiment Matrix Runner
+
+To run all requested combinations (mode/search-type/scorer/dataset-form) with separate output folders, use:
+
+```bash
+python run_experiment_matrix.py --config experiment_matrix.yaml
+```
+
+Dry run (print commands only):
+
+```bash
+python run_experiment_matrix.py --config experiment_matrix.yaml --dry-run
+```
+
+Folder layout produced under `results/`:
+
+```text
+results/
+  unified/
+    hybrid/
+      rsf/
+        multiple/
+        single-user/
+      rrf/
+        multiple/
+        single-user/
+    vector/
+      multiple/
+      single-user/
+  parallel/
+    ... (same pattern)
+```
+
+Each leaf directory contains:
+- `results.csv`
+- `summary.csv`
+- `report.html`
+
+
 An HTML report is now always generated. By default it is saved as `report.html`:
 
 ```bash
