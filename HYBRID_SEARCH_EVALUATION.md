@@ -197,7 +197,7 @@ You can now provide discovery procedure arguments as a grouped JSON config and/o
 | `--discover-cols-per-obj` | 5 | Max columns attached per object |
 | `--discover-alpha` | 0.65 | Sequential rerank blend alpha (`p_alpha`) |
 | `--discover-parallel-alpha` | 0.60 | Parallel rerank blend alpha (`p_alpha`) |
-| `--discover-unified-score-threshold` | 0.60 | Unified mode score threshold |
+| `--discover-score-threshold` | 60.0 | Unified mode score threshold (`[0,100]`) |
 | `--discover-search-scorer` | RSF | Hybrid `search_scorer` |
 | `--discover-search-fusion` | UNION | Hybrid `search_fusion` |
 | `--discover-vector-search-mode` | DOCUMENT | Hybrid `vector.search_mode` |
@@ -209,8 +209,10 @@ You can now provide discovery procedure arguments as a grouped JSON config and/o
 | `--discover-text-rank-penalty` | 1 | Hybrid `text.rank_penalty` |
 
 `--discover-text-contains` auto behavior: when `--search-type hybrid` is used and this
-flag is omitted, the runner generates keywords from the query text via Python NLTK
-(`word_tokenize`, English stopwords filtering, `isalpha`, dedupe, joined with `OR`).
+flag is omitted, the runner generates keywords from the query text in Python. It
+uses NLTK (`word_tokenize` + English stopwords filtering + `isalpha` + dedupe, joined
+with `OR`) when available, and falls back to built-in regex/stopword filtering when NLTK
+resources are unavailable.
 
 Override precedence: explicit CLI flags > `--discover-config-json` > built-in defaults.
 

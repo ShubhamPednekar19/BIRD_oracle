@@ -196,7 +196,7 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
 --      object_ids from (1) (top p_n, default p_k0*5)
 --   3) Group: top p_cols_per_obj columns per object
 --   4) Normalize and rerank:
---        final_score = p_alpha * obj_norm + (1-p_alpha) * avg(top_col_norm)
+--        final_score = p_alpha * obj_score_raw + (1-p_alpha) * avg(top_col_norm)
 --   5) Output: JSON array of ranked objects with matched columns
 --
 -- PARAMETERS:
@@ -214,9 +214,10 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_k0            IN  PLS_INTEGER DEFAULT 50,
     p_n             IN  PLS_INTEGER DEFAULT NULL,
     p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
-    p_alpha         IN  NUMBER      DEFAULT 0.65,
-    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
-    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
+    p_alpha               IN NUMBER   DEFAULT 0.65,
+    p_score_threshold     IN NUMBER   DEFAULT 0.5,
+    p_search_scorer       IN VARCHAR2 DEFAULT 'RSF',
+    p_search_fusion       IN VARCHAR2 DEFAULT 'UNION',
     p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
     p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
     p_vector_score_weight IN NUMBER   DEFAULT 1,
@@ -291,7 +292,7 @@ CREATE OR REPLACE PACKAGE developer AUTHID CURRENT_USER AS
     p_k                IN  PLS_INTEGER DEFAULT NULL,
     p_m                IN  PLS_INTEGER DEFAULT 10,
     p_cols_per_obj     IN  PLS_INTEGER DEFAULT 10,
-    p_score_threshold  IN  NUMBER      DEFAULT 0.6,
+    p_score_threshold  IN  NUMBER      DEFAULT 0.5,
     p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
     p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
     p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
@@ -326,23 +327,29 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     l_text JSON_OBJECT_T := JSON_OBJECT_T();
     l_contains CLOB;
   BEGIN
-    p_req.put('search_scorer', UPPER(NVL(p_search_scorer, 'RSF')));
-    p_req.put('search_fusion', UPPER(NVL(p_search_fusion, 'UNION')));
+
 
     l_vector.put('search_text', p_query);
     l_vector.put('search_mode', UPPER(NVL(p_vector_search_mode, 'DOCUMENT')));
-    l_vector.put('aggregator', UPPER(NVL(p_vector_aggregator, 'MAX')));
-    l_vector.put('score_weight', NVL(p_vector_score_weight, 1));
-    l_vector.put('rank_penalty', NVL(p_vector_rank_penalty, 5));
-    p_req.put('vector', l_vector);
 
     l_contains := p_text_contains;
     IF l_contains IS NOT NULL THEN
       l_text.put('contains', l_contains);
+      l_text.put('score_weight', NVL(p_text_score_weight, 10));
+      l_text.put('rank_penalty', NVL(p_text_rank_penalty, 1));
+
+      l_vector.put('aggregator', UPPER(NVL(p_vector_aggregator, 'MAX')));
+      l_vector.put('score_weight', NVL(p_vector_score_weight, 1));
+      l_vector.put('rank_penalty', NVL(p_vector_rank_penalty, 5)); 
+
+      p_req.put('search_scorer', UPPER(NVL(p_search_scorer, 'RSF')));
+      p_req.put('search_fusion', UPPER(NVL(p_search_fusion, 'UNION')));
+
+      p_req.put('text', l_text);
     END IF;
-    l_text.put('score_weight', NVL(p_text_score_weight, 10));
-    l_text.put('rank_penalty', NVL(p_text_rank_penalty, 1));
-    p_req.put('text', l_text);
+    
+    p_req.put('vector', l_vector);
+
   END apply_hybrid_search_params;
 
   /* ------------------------------------------------------------------------ */
@@ -360,12 +367,12 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       END IF;
   END;
 
-  /* ======================================================================== */
+/* ======================================================================== */
   /* REFRESH_DATA                                                             */
   /* ======================================================================== */
   PROCEDURE refresh_data(p_table_name IN VARCHAR2 DEFAULT NULL) IS
     l_meta           JSON;
-    l_owner          VARCHAR2(128) := SYS_CONTEXT('USERENV','CURRENT_SCHEMA');
+    l_owner          VARCHAR2(128) := SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA');
     l_target_name    VARCHAR2(128) := CASE
                                        WHEN p_table_name IS NULL THEN NULL
                                        ELSE UPPER(TRIM(p_table_name))
@@ -373,16 +380,70 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     l_obj_annotation JSON;
     l_col_summary    CLOB;
     l_table_comment  CLOB;
-
-    -- JSON text for table-level annotation
     l_obj_ann_clob   CLOB;
+
+    FUNCTION format_annotation_json(p_json JSON) RETURN CLOB IS
+      l_result CLOB;
+    BEGIN
+      IF p_json IS NULL THEN
+        RETURN NULL;
+      END IF;
+
+      BEGIN
+        SELECT TO_CLOB(
+                 LISTAGG(
+                   CASE
+                     WHEN ann.name IS NOT NULL AND ann.value IS NOT NULL
+                       THEN ann.name || ': ' || ann.value
+                     WHEN ann.value IS NOT NULL
+                       THEN ann.value
+                     ELSE NULL
+                   END,
+                   '; '
+                 )
+               )
+          INTO l_result
+          FROM (
+                 SELECT ordinal,
+                        name,
+                        TRIM(REGEXP_REPLACE(value, '[[:space:]]+', ' ')) AS value
+                 FROM JSON_TABLE(
+                        JSON_SERIALIZE(p_json RETURNING CLOB),
+                        '$[*]'
+                        COLUMNS (
+                          ordinal FOR ORDINALITY,
+                          name    VARCHAR2(4000) PATH '$.name',
+                          value   VARCHAR2(4000) PATH '$.value'
+                        )
+                      )
+               ) ann;
+
+        IF l_result IS NOT NULL THEN
+          RETURN l_result;
+        END IF;
+      EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+          NULL;
+      END;
+
+      RETURN TO_CLOB(
+               TRIM(
+                 REGEXP_REPLACE(
+                   JSON_SERIALIZE(p_json RETURNING CLOB),
+                   '[[:space:]]+',
+                   ' '
+                 )
+               )
+             );
+    END format_annotation_json;
+
   BEGIN
     FOR r IN (
       SELECT object_id, object_name, object_type
       FROM   user_objects
-      WHERE  object_type IN ('TABLE','VIEW')
+      WHERE  object_type IN ('TABLE', 'VIEW')
       AND    (l_target_name IS NULL OR object_name = l_target_name)
-      AND    object_name NOT IN ('ALL_OBJECTS_SEARCH_TEXT','ALL_COLS_SEARCH_TEXT','ALL_UNIFIED_SEARCH_TEXT')
+      AND    object_name NOT IN ('ALL_OBJECTS_SEARCH_TEXT', 'ALL_COLS_SEARCH_TEXT', 'ALL_UNIFIED_SEARCH_TEXT')
       AND    object_name NOT LIKE 'DM$%'
       AND    object_name NOT LIKE 'BIN$%'
     )
@@ -393,7 +454,6 @@ CREATE OR REPLACE PACKAGE BODY developer AS
                   level       => 'TYPICAL'
                 );
 
-      -- Object annotations 
       SELECT jt.obj_annotations
       INTO   l_obj_annotation
       FROM   JSON_TABLE(
@@ -404,14 +464,8 @@ CREATE OR REPLACE PACKAGE BODY developer AS
                )
              ) jt;
 
-      -- Serialize object annotation to CLOB for the unified table
-      l_obj_ann_clob := CASE
-                          WHEN l_obj_annotation IS NOT NULL
-                          THEN JSON_SERIALIZE(l_obj_annotation RETURNING CLOB)
-                          ELSE NULL
-                        END;
+      l_obj_ann_clob := format_annotation_json(l_obj_annotation);
 
-      -- Column summary: concat column names
       SELECT LISTAGG(col_name, ' ') WITHIN GROUP (ORDER BY col_pos)
       INTO   l_col_summary
       FROM   JSON_TABLE(
@@ -423,7 +477,6 @@ CREATE OR REPLACE PACKAGE BODY developer AS
                )
              );
 
-      -- Table comment
       BEGIN
         SELECT comments INTO l_table_comment
         FROM   user_tab_comments
@@ -432,7 +485,6 @@ CREATE OR REPLACE PACKAGE BODY developer AS
         WHEN NO_DATA_FOUND THEN l_table_comment := NULL;
       END;
 
-      /* ----- Upsert into ALL_OBJECTS_SEARCH_TEXT ----- */
       MERGE INTO all_objects_search_text dst
       USING (
         SELECT
@@ -441,7 +493,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
           l_owner          AS owner,
           r.object_type    AS object_type,
           l_table_comment  AS comment_text,
-          l_obj_annotation AS annotation,
+          l_obj_ann_clob   AS annotation,
           l_col_summary    AS column_summary
         FROM dual
       ) src
@@ -459,7 +511,6 @@ CREATE OR REPLACE PACKAGE BODY developer AS
         src.object_id, src.object_name, src.owner, src.object_type, src.comment_text, src.annotation, src.column_summary, 'X'
       );
 
-      -- Refresh columns for this object
       DELETE FROM all_cols_search_text
       WHERE  object_id = r.object_id;
 
@@ -473,7 +524,21 @@ CREATE OR REPLACE PACKAGE BODY developer AS
         jt.col_name,
         jt.data_type,
         ucc.comments,
-        jt.col_annotations,
+        CASE
+          WHEN col_ann.formatted_annotation IS NOT NULL
+            THEN col_ann.formatted_annotation
+          WHEN jt.col_annotations IS NOT NULL
+            THEN TO_CLOB(
+                   TRIM(
+                     REGEXP_REPLACE(
+                       JSON_SERIALIZE(jt.col_annotations RETURNING CLOB),
+                       '[[:space:]]+',
+                       ' '
+                     )
+                   )
+                 )
+          ELSE NULL
+        END,
         'X'
       FROM JSON_TABLE(
              l_meta,
@@ -484,12 +549,47 @@ CREATE OR REPLACE PACKAGE BODY developer AS
                col_annotations JSON          PATH '$.annotations'
              )
            ) jt
+      OUTER APPLY (
+        SELECT CASE
+                 WHEN COUNT(*) > 0
+                   THEN TO_CLOB(
+                          LISTAGG(
+                            CASE
+                              WHEN ann.name IS NOT NULL AND ann.value IS NOT NULL
+                                THEN ann.name || ': ' || ann.value
+                              WHEN ann.value IS NOT NULL
+                                THEN ann.value
+                              ELSE NULL
+                            END,
+                            '; '
+                          )
+                        )
+                 ELSE NULL
+               END AS formatted_annotation
+        FROM (
+               SELECT ordinal,
+                      name,
+                      TRIM(REGEXP_REPLACE(value, '[[:space:]]+', ' ')) AS value
+               FROM JSON_TABLE(
+                      CASE
+                        WHEN jt.col_annotations IS NOT NULL
+                          THEN JSON_SERIALIZE(jt.col_annotations RETURNING CLOB)
+                        ELSE TO_CLOB('[]')
+                      END,
+                      '$[*]'
+                      COLUMNS (
+                        ordinal FOR ORDINALITY,
+                        name    VARCHAR2(4000) PATH '$.name',
+                        value   VARCHAR2(4000) PATH '$.value'
+                      )
+                    )
+             ) ann
+      ) col_ann
       LEFT JOIN user_col_comments ucc
         ON ucc.table_name  = r.object_name
        AND ucc.column_name = jt.col_name
       WHERE jt.col_name IS NOT NULL;
 
-      /* ----- Refresh ALL_UNIFIED_SEARCH_TEXT ----- */
       DELETE FROM all_unified_search_text
       WHERE  owner      = l_owner
       AND    table_name = r.object_name;
@@ -506,13 +606,24 @@ CREATE OR REPLACE PACKAGE BODY developer AS
         jt.col_name,
         r.object_type,
         jt.data_type,
-        ucc.comments,                                                   -- column comment
-        CASE WHEN jt.col_annotations IS NOT NULL
-             THEN JSON_SERIALIZE(jt.col_annotations RETURNING CLOB)
-             ELSE NULL
-        END,                                                             -- column annotation (CLOB)
-        l_table_comment,                                                 -- table comment (denormalized)
-        l_obj_ann_clob,                                                  -- table annotation (denormalized)
+        ucc.comments,
+        CASE
+          WHEN col_ann.formatted_annotation IS NOT NULL
+            THEN col_ann.formatted_annotation
+          WHEN jt.col_annotations IS NOT NULL
+            THEN TO_CLOB(
+                   TRIM(
+                     REGEXP_REPLACE(
+                       JSON_SERIALIZE(jt.col_annotations RETURNING CLOB),
+                       '[[:space:]]+',
+                       ' '
+                     )
+                   )
+                 )
+          ELSE NULL
+        END,
+        l_table_comment,
+        l_obj_ann_clob,
         'X'
       FROM JSON_TABLE(
              l_meta,
@@ -523,6 +634,42 @@ CREATE OR REPLACE PACKAGE BODY developer AS
                col_annotations JSON          PATH '$.annotations'
              )
            ) jt
+      OUTER APPLY (
+        SELECT CASE
+                 WHEN COUNT(*) > 0
+                   THEN TO_CLOB(
+                          LISTAGG(
+                            CASE
+                              WHEN ann.name IS NOT NULL AND ann.value IS NOT NULL
+                                THEN ann.name || ': ' || ann.value
+                              WHEN ann.value IS NOT NULL
+                                THEN ann.value
+                              ELSE NULL
+                            END,
+                            '; '
+                          )
+                        )
+                 ELSE NULL
+               END AS formatted_annotation
+        FROM (
+               SELECT ordinal,
+                      name,
+                      TRIM(REGEXP_REPLACE(value, '[[:space:]]+', ' ')) AS value
+               FROM JSON_TABLE(
+                      CASE
+                        WHEN jt.col_annotations IS NOT NULL
+                          THEN JSON_SERIALIZE(jt.col_annotations RETURNING CLOB)
+                        ELSE TO_CLOB('[]')
+                      END,
+                      '$[*]'
+                      COLUMNS (
+                        ordinal FOR ORDINALITY,
+                        name    VARCHAR2(4000) PATH '$.name',
+                        value   VARCHAR2(4000) PATH '$.value'
+                      )
+                    )
+             ) ann
+      ) col_ann
       LEFT JOIN user_col_comments ucc
         ON ucc.table_name  = r.object_name
        AND ucc.column_name = jt.col_name
@@ -532,6 +679,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
 
     COMMIT;
   END refresh_data;
+
 
   /* ======================================================================== */
   /* SETUP_HYBRID_SEARCH                                                      */
@@ -628,14 +776,45 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     ctx_ddl.add_field_section('UNI_DISCOVERY_SG', 'DATA_TYPE',   'data_type',   TRUE);
 
     /* Optional wordlists (basic) */
-    BEGIN ctx_ddl.drop_preference('OBJ_DISCOVERY_WL'); EXCEPTION WHEN OTHERS THEN NULL; END;
-    ctx_ddl.create_preference('OBJ_DISCOVERY_WL', 'BASIC_WORDLIST');
+    BEGIN ctx_ddl.drop_preference('my_wordlist'); EXCEPTION WHEN OTHERS THEN NULL; END;
+    CTX_DDL.CREATE_PREFERENCE('my_wordlist', 'BASIC_WORDLIST');
+    CTX_DDL.SET_ATTRIBUTE('my_wordlist', 'STEMMER', 'ENGLISH');
+    CTX_DDL.SET_ATTRIBUTE('my_wordlist', 'FUZZY_MATCH', 'ENGLISH');
+    CTX_DDL.SET_ATTRIBUTE('my_wordlist', 'FUZZY_SCORE', '1');
+    CTX_DDL.SET_ATTRIBUTE('my_wordlist','SUBSTRING_INDEX','TRUE');
 
-    BEGIN ctx_ddl.drop_preference('COL_DISCOVERY_WL'); EXCEPTION WHEN OTHERS THEN NULL; END;
-    ctx_ddl.create_preference('COL_DISCOVERY_WL', 'BASIC_WORDLIST');
+    -- lexer
+    -- 1. Create a new lexer preference
+    BEGIN ctx_ddl.drop_preference('my_sql_lexer'); EXCEPTION WHEN OTHERS THEN NULL; END;
+    CTX_DDL.CREATE_PREFERENCE('my_sql_lexer', 'BASIC_LEXER');
 
-    BEGIN ctx_ddl.drop_preference('UNI_DISCOVERY_WL'); EXCEPTION WHEN OTHERS THEN NULL; END;
-    ctx_ddl.create_preference('UNI_DISCOVERY_WL', 'BASIC_WORDLIST');
+    -- 2. Define underscore (_) as a character that belongs inside a word
+    -- You can add others here too, like '$' or '#'
+    CTX_DDL.SET_ATTRIBUTE('my_sql_lexer', 'printjoins', '_');
+    CTX_DDL.SET_ATTRIBUTE('my_sql_lexer','MIXED_CASE','NO');
+
+    -- Stoplist
+    -- 1. Create your custom stoplist
+    BEGIN ctx_ddl.DROP_STOPLIST('my_sql_stoplist'); EXCEPTION WHEN OTHERS THEN NULL; END;
+    CTX_DDL.CREATE_STOPLIST('my_sql_stoplist', 'BASIC_STOPLIST');
+    -- 2. Automatically copy all words from the system's default English list
+    FOR r IN (SELECT spw_word 
+              FROM ctx_stopwords 
+              WHERE spw_stoplist = 'DEFAULT_STOPLIST') 
+    LOOP
+        CTX_DDL.ADD_STOPWORD('my_sql_stoplist', r.spw_word);
+    END LOOP;
+
+    -- 3. Add your specific "NUMBERS" stopclass
+    CTX_DDL.ADD_STOPCLASS('my_sql_stoplist', 'NUMBERS');
+
+    -- 4. Add any extra words specific to your use case (optional)
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'SHOW');
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'WANT');
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'PLEASE');
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'COLUMN');
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'TABLE');
+    CTX_DDL.ADD_STOPWORD('my_sql_stoplist', 'VIEW');
 
     /* 5) Hybrid vector indexes (base column must be text -> DUMMY) */
     IF p_create_obj_col_indexes THEN
@@ -645,8 +824,10 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       l_params_obj :=
         'VECTORIZER '    || p_vectorizer       || ' ' ||
         'DATASTORE '     || 'OBJ_DISCOVERY_DS' || ' ' ||
-        'WORDLIST '      || 'OBJ_DISCOVERY_WL' || ' ' ||
-        'SECTION GROUP ' || 'OBJ_DISCOVERY_SG';
+        'WORDLIST '      || 'my_wordlist'      || ' ' ||
+        'SECTION GROUP ' || 'OBJ_DISCOVERY_SG' || ' ' ||
+        'LEXER '         || 'my_sql_lexer'     || ' ' ||
+        'STOPLIST '      || 'my_sql_stoplist';
 
       EXECUTE IMMEDIATE
         'CREATE HYBRID VECTOR INDEX obj_discovery_hvix ON all_objects_search_text(dummy) ' ||
@@ -655,8 +836,10 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       l_params_col :=
         'VECTORIZER '    || p_vectorizer       || ' ' ||
         'DATASTORE '     || 'COL_DISCOVERY_DS' || ' ' ||
-        'WORDLIST '      || 'COL_DISCOVERY_WL' || ' ' ||
-        'SECTION GROUP ' || 'COL_DISCOVERY_SG';
+        'WORDLIST '      || 'my_wordlist'      || ' ' ||
+        'SECTION GROUP ' || 'COL_DISCOVERY_SG' || ' ' ||
+        'LEXER '         || 'my_sql_lexer'     || ' ' ||
+        'STOPLIST '      || 'my_sql_stoplist';
 
       EXECUTE IMMEDIATE
         'CREATE HYBRID VECTOR INDEX col_discovery_hvix ON all_cols_search_text(dummy) ' ||
@@ -669,8 +852,10 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       l_params_uni :=
         'VECTORIZER '    || p_vectorizer       || ' ' ||
         'DATASTORE '     || 'UNI_DISCOVERY_DS' || ' ' ||
-        'WORDLIST '      || 'UNI_DISCOVERY_WL' || ' ' ||
-        'SECTION GROUP ' || 'UNI_DISCOVERY_SG';
+        'WORDLIST '      || 'my_wordlist'      || ' ' ||
+        'SECTION GROUP ' || 'UNI_DISCOVERY_SG' || ' ' ||
+        'LEXER '         || 'my_sql_lexer'     || ' ' ||
+        'STOPLIST '      || 'my_sql_stoplist';
 
       EXECUTE IMMEDIATE
         'CREATE HYBRID VECTOR INDEX uni_discovery_hvix ON all_unified_search_text(dummy) ' ||
@@ -683,316 +868,296 @@ CREATE OR REPLACE PACKAGE BODY developer AS
   /* DISCOVER_OBJECTS                                                         */
   /* ======================================================================== */
   PROCEDURE discover_objects(
-    p_query         IN  CLOB,
-    p_k             IN  PLS_INTEGER DEFAULT 10,
-    p_k0            IN  PLS_INTEGER DEFAULT 50,
-    p_n             IN  PLS_INTEGER DEFAULT NULL,
-    p_cols_per_obj  IN  PLS_INTEGER DEFAULT 3,
-    p_alpha         IN  NUMBER      DEFAULT 0.65,
-    p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
-    p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
-    p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
-    p_vector_aggregator   IN VARCHAR2 DEFAULT 'MAX',
-    p_vector_score_weight IN NUMBER   DEFAULT 1,
-    p_vector_rank_penalty IN NUMBER   DEFAULT 5,
-    p_text_contains       IN CLOB     DEFAULT NULL,
-    p_text_score_weight   IN NUMBER   DEFAULT 10,
-    p_text_rank_penalty   IN NUMBER   DEFAULT 1,
-    p_result_json   OUT JSON
-  ) IS
-    c_obj_index CONSTANT VARCHAR2(128) := 'OBJ_DISCOVERY_HVIX';
-    c_col_index CONSTANT VARCHAR2(128) := 'COL_DISCOVERY_HVIX';
+      p_query              IN  CLOB,
+      p_k                  IN  PLS_INTEGER DEFAULT 10,
+      p_k0                 IN  PLS_INTEGER DEFAULT 50,
+      p_n                  IN  PLS_INTEGER DEFAULT NULL,
+      p_cols_per_obj       IN  PLS_INTEGER DEFAULT 3,
+      p_alpha              IN  NUMBER      DEFAULT 0.65,
+      p_score_threshold      IN NUMBER     DEFAULT 0.5,
+      p_search_scorer      IN  VARCHAR2    DEFAULT 'RSF',
+      p_search_fusion      IN  VARCHAR2    DEFAULT 'UNION',
+      p_vector_search_mode IN  VARCHAR2    DEFAULT 'DOCUMENT',
+      p_vector_aggregator  IN  VARCHAR2    DEFAULT 'MAX',
+      p_vector_score_weight IN NUMBER      DEFAULT 1,
+      p_vector_rank_penalty IN NUMBER      DEFAULT 5,
+      p_text_contains        IN CLOB       DEFAULT NULL,
+      p_text_score_weight    IN NUMBER     DEFAULT 10,
+      p_text_rank_penalty    IN NUMBER     DEFAULT 1,
+      p_result_json          OUT JSON
+    ) IS
+      c_obj_index CONSTANT VARCHAR2(128) := 'OBJ_DISCOVERY_HVIX';
+      c_col_index CONSTANT VARCHAR2(128) := 'COL_DISCOVERY_HVIX';
 
-    l_n       PLS_INTEGER := NVL(p_n, p_k0 * 5);
+      l_n          PLS_INTEGER := NVL(p_n, p_k0 * 5);
+      l_threshold  NUMBER := GREATEST(0, LEAST(1, NVL(p_score_threshold, 0.5)));
 
-    l_obj_res CLOB;
-    l_col_res CLOB;
+      l_obj_res CLOB;
+      l_col_res CLOB;
 
-    l_min_obj NUMBER := NULL;
-    l_max_obj NUMBER := NULL;
-    l_min_col NUMBER := NULL;
-    l_max_col NUMBER := NULL;
-
-    TYPE t_obj_rec IS RECORD (
-      object_id     NUMBER,
-      object_name   VARCHAR2(128),
-      owner         VARCHAR2(128),
-      object_type   VARCHAR2(23),
-      obj_score_raw NUMBER,
-      obj_norm      NUMBER,
-      col_support   NUMBER,
-      final_score   NUMBER
-    );
-    TYPE t_obj_tab IS TABLE OF t_obj_rec;
-    l_objs t_obj_tab := t_obj_tab();
-
-    TYPE t_col_rec IS RECORD (
-      object_id     NUMBER,
-      column_name   VARCHAR2(128),
-      data_type     VARCHAR2(128),
-      col_score_raw NUMBER,
-      col_norm      NUMBER
-    );
-    TYPE t_col_tab IS TABLE OF t_col_rec;
-    l_cols t_col_tab := t_col_tab();
-
-    TYPE t_objid_to_idx IS TABLE OF PLS_INTEGER INDEX BY VARCHAR2(64);
-    l_obj_map t_objid_to_idx;
-
-    TYPE t_top_cols  IS TABLE OF t_col_rec INDEX BY PLS_INTEGER;
-    TYPE t_count_tab IS TABLE OF PLS_INTEGER INDEX BY PLS_INTEGER;
-    TYPE t_best_tab  IS TABLE OF t_top_cols INDEX BY PLS_INTEGER;
-    l_counts t_count_tab;
-    l_best   t_best_tab;
-
-    FUNCTION clamp01(p_x NUMBER) RETURN NUMBER IS
-    BEGIN
-      IF p_x < 0 THEN RETURN 0; END IF;
-      IF p_x > 1 THEN RETURN 1; END IF;
-      RETURN p_x;
-    END;
-  BEGIN
-    p_result_json := JSON('[]');
-    IF p_query IS NULL OR DBMS_LOB.getlength(p_query) = 0 THEN 
-      RETURN; 
-    END IF;
-
-    /* ---- Stage 1: object hybrid search ---- */
-    DECLARE
-      req  JSON_OBJECT_T := JSON_OBJECT_T();
-      ret  JSON_OBJECT_T := JSON_OBJECT_T();
-      vals JSON_ARRAY_T  := JSON_ARRAY_T();
-    BEGIN
-      vals.append('rowid'); vals.append('score');
-      ret.put('topN', p_k0);
-      ret.put('values', vals);
-
-      req.put('hybrid_index_name', c_obj_index);
-      apply_hybrid_search_params(
-        req, p_query, p_search_scorer, p_search_fusion,
-        p_vector_search_mode, p_vector_aggregator,
-        p_vector_score_weight, p_vector_rank_penalty,
-        p_text_contains, p_text_score_weight, p_text_rank_penalty
+      TYPE t_obj_rec IS RECORD (
+        object_id     NUMBER,
+        object_name   VARCHAR2(128),
+        owner         VARCHAR2(128),
+        object_type   VARCHAR2(23),
+        obj_score_raw NUMBER,
+        col_support   NUMBER,
+        final_score   NUMBER
       );
-      req.put('return', ret);
+      TYPE t_obj_tab IS TABLE OF t_obj_rec;
+      l_objs t_obj_tab := t_obj_tab();
 
-      l_obj_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
-    END;
+      TYPE t_col_rec IS RECORD (
+        object_id     NUMBER,
+        column_name   VARCHAR2(128),
+        data_type     VARCHAR2(128),
+        col_score_raw NUMBER
+      );
+      TYPE t_col_tab IS TABLE OF t_col_rec;
+      l_cols t_col_tab := t_col_tab();
 
-    FOR r IN (
-      SELECT 
-        o.object_id, o.object_name, o.owner, o.object_type, 
-        jt.score AS obj_score_raw
-      FROM JSON_TABLE(
-            l_obj_res, 
-            '$[*]'
-             COLUMNS (
-                rowid_txt VARCHAR2(200) PATH '$.rowid', 
-                score NUMBER PATH '$.score'
-             )
-           ) jt
-      JOIN all_objects_search_text o 
-        ON o.rowid = CHARTOROWID(jt.rowid_txt)
-    ) 
-    LOOP
-      l_objs.EXTEND;
-      l_objs(l_objs.COUNT).object_id     := r.object_id;
-      l_objs(l_objs.COUNT).object_name   := r.object_name;
-      l_objs(l_objs.COUNT).owner         := r.owner;
-      l_objs(l_objs.COUNT).object_type   := r.object_type;
-      l_objs(l_objs.COUNT).obj_score_raw := r.obj_score_raw;
-      l_obj_map(TO_CHAR(r.object_id)) := l_objs.COUNT;
-      IF l_min_obj IS NULL OR r.obj_score_raw < l_min_obj THEN l_min_obj := r.obj_score_raw; END IF;
-      IF l_max_obj IS NULL OR r.obj_score_raw > l_max_obj THEN l_max_obj := r.obj_score_raw; END IF;
-    END LOOP;
+      TYPE t_objid_to_idx IS TABLE OF PLS_INTEGER INDEX BY VARCHAR2(64);
+      l_obj_map t_objid_to_idx;
 
-    IF l_objs.COUNT = 0 THEN 
-      RETURN; 
-    END IF;
+      TYPE t_top_cols  IS TABLE OF t_col_rec INDEX BY PLS_INTEGER;
+      TYPE t_count_tab IS TABLE OF PLS_INTEGER INDEX BY PLS_INTEGER;
+      TYPE t_best_tab  IS TABLE OF t_top_cols INDEX BY PLS_INTEGER;
+      l_counts t_count_tab;
+      l_best   t_best_tab;
 
-    FOR i IN 1 .. l_objs.COUNT LOOP
-      l_objs(i).obj_norm := 
-      CASE
-        WHEN l_max_obj = l_min_obj THEN 1
-        ELSE (l_objs(i).obj_score_raw - l_min_obj) / (l_max_obj - l_min_obj)
+      FUNCTION clamp01(p_x NUMBER) RETURN NUMBER IS
+      BEGIN
+        IF p_x < 0 THEN RETURN 0; END IF;
+        IF p_x > 1 THEN RETURN 1; END IF;
+        RETURN p_x;
       END;
-      l_objs(i).obj_norm := clamp01(l_objs(i).obj_norm);
-    END LOOP;
-
-    /* ---- Stage 2: column hybrid search restricted to stage-1 object_ids ---- */
-    DECLARE
-      req  JSON_OBJECT_T := JSON_OBJECT_T();
-      ret  JSON_OBJECT_T := JSON_OBJECT_T();
-      vals JSON_ARRAY_T  := JSON_ARRAY_T();
-      fb   JSON_OBJECT_T := JSON_OBJECT_T();
-      args JSON_ARRAY_T  := JSON_ARRAY_T();
     BEGIN
-      FOR i IN 1 .. l_objs.COUNT LOOP 
-        args.append(l_objs(i).object_id); 
-      END LOOP;
+      p_result_json := JSON('[]');
+      IF p_query IS NULL OR DBMS_LOB.getlength(p_query) = 0 THEN
+        RETURN;
+      END IF;
 
-      fb.put('op', 'IN'); 
-      fb.put('type', 'number'); 
-      fb.put('col', 'OBJECT_ID'); 
-      fb.put('args', args);
+      /* ---- Stage 1: object hybrid search ---- */
+      DECLARE
+        req  JSON_OBJECT_T := JSON_OBJECT_T();
+        ret  JSON_OBJECT_T := JSON_OBJECT_T();
+        vals JSON_ARRAY_T  := JSON_ARRAY_T();
+      BEGIN
+        vals.append('rowid'); vals.append('score');
+        ret.put('topN', p_k0);
+        ret.put('values', vals);
 
-      vals.append('rowid'); vals.append('score');
-      ret.put('topN', l_n); 
-      ret.put('values', vals);
+        req.put('hybrid_index_name', c_obj_index);
+        apply_hybrid_search_params(
+          req, p_query, p_search_scorer, p_search_fusion,
+          p_vector_search_mode, p_vector_aggregator,
+          p_vector_score_weight, p_vector_rank_penalty,
+          p_text_contains, p_text_score_weight, p_text_rank_penalty
+        );
+        req.put('return', ret);
 
-      req.put('hybrid_index_name', c_col_index);
-      apply_hybrid_search_params(
-        req, p_query, p_search_scorer, p_search_fusion,
-        p_vector_search_mode, p_vector_aggregator,
-        p_vector_score_weight, p_vector_rank_penalty,
-        p_text_contains, p_text_score_weight, p_text_rank_penalty
-      );
-      req.put('filter_by', fb);
-      req.put('return', ret);
+        l_obj_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
+      END;
 
-      l_col_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
-    END;
-
-    FOR r IN (
-      SELECT 
-      c.object_id, 
-      c.column_name, 
-      c.data_type, 
-      jt.score AS col_score_raw
-      FROM JSON_TABLE(
-               l_col_res, 
+      FOR r IN (
+        SELECT
+          o.object_id, o.object_name, o.owner, o.object_type,
+          jt.score AS obj_score_raw
+        FROM JSON_TABLE(
+               l_obj_res,
                '$[*]'
                COLUMNS (
-                rowid_txt VARCHAR2(200) PATH '$.rowid', 
-                score NUMBER PATH '$.score'
+                 rowid_txt VARCHAR2(200) PATH '$.rowid',
+                 score     NUMBER        PATH '$.score'
                )
-           ) jt
-      JOIN all_cols_search_text c 
-        ON c.rowid = CHARTOROWID(jt.rowid_txt)
-    ) 
-    LOOP
-      l_cols.EXTEND;
-      l_cols(l_cols.COUNT).object_id     := r.object_id;
-      l_cols(l_cols.COUNT).column_name   := r.column_name;
-      l_cols(l_cols.COUNT).data_type     := r.data_type;
-      l_cols(l_cols.COUNT).col_score_raw := r.col_score_raw;
-      IF l_min_col IS NULL OR r.col_score_raw < l_min_col THEN l_min_col := r.col_score_raw; END IF;
-      IF l_max_col IS NULL OR r.col_score_raw > l_max_col THEN l_max_col := r.col_score_raw; END IF;
-    END LOOP;
-
-    IF l_cols.COUNT > 0 THEN
-      FOR i IN 1 .. l_cols.COUNT LOOP
-        l_cols(i).col_norm := 
-        CASE
-          WHEN l_max_col = l_min_col THEN 1
-          ELSE (l_cols(i).col_score_raw - l_min_col) / (l_max_col - l_min_col)
-        END;
-        l_cols(i).col_norm := clamp01(l_cols(i).col_norm);
-      END LOOP;
-    END IF;
-
-    /* ---- Group top columns per object ---- */
-    FOR i IN 1 .. l_objs.COUNT LOOP 
-      l_counts(i) := 0; 
-    END LOOP;
-
-    FOR i IN 1 .. l_cols.COUNT LOOP
-      DECLARE
-        obj_idx PLS_INTEGER;
-        tmp     t_col_rec;
-      BEGIN
-        obj_idx := l_obj_map(TO_CHAR(l_cols(i).object_id));
-        IF obj_idx IS NULL THEN 
-          CONTINUE; 
+             ) jt
+        JOIN all_objects_search_text o
+          ON o.rowid = CHARTOROWID(jt.rowid_txt)
+      )
+      LOOP
+        IF r.obj_score_raw < l_threshold THEN
+          CONTINUE;
         END IF;
-        tmp := l_cols(i);
-        IF l_counts(obj_idx) < p_cols_per_obj THEN
-          l_counts(obj_idx) := l_counts(obj_idx) + 1;
-          l_best(obj_idx)(l_counts(obj_idx)) := tmp;
-        ELSE
-          IF tmp.col_norm > l_best(obj_idx)(l_counts(obj_idx)).col_norm THEN
-            l_best(obj_idx)(l_counts(obj_idx)) := tmp;
-          ELSE 
+
+        l_objs.EXTEND;
+        l_objs(l_objs.COUNT).object_id     := r.object_id;
+        l_objs(l_objs.COUNT).object_name   := r.object_name;
+        l_objs(l_objs.COUNT).owner         := r.owner;
+        l_objs(l_objs.COUNT).object_type   := r.object_type;
+        l_objs(l_objs.COUNT).obj_score_raw := r.obj_score_raw;
+        l_obj_map(TO_CHAR(r.object_id)) := l_objs.COUNT;
+      END LOOP;
+
+      IF l_objs.COUNT = 0 THEN
+        RETURN;
+      END IF;
+
+      /* ---- Stage 2: column hybrid search restricted to stage-1 object_ids ---- */
+      DECLARE
+        req  JSON_OBJECT_T := JSON_OBJECT_T();
+        ret  JSON_OBJECT_T := JSON_OBJECT_T();
+        vals JSON_ARRAY_T  := JSON_ARRAY_T();
+        fb   JSON_OBJECT_T := JSON_OBJECT_T();
+        args JSON_ARRAY_T  := JSON_ARRAY_T();
+      BEGIN
+        FOR i IN 1 .. l_objs.COUNT LOOP
+          args.append(l_objs(i).object_id);
+        END LOOP;
+
+        fb.put('op', 'IN');
+        fb.put('type', 'number');
+        fb.put('col', 'OBJECT_ID');
+        fb.put('args', args);
+
+        vals.append('rowid'); vals.append('score');
+        ret.put('topN', l_n);
+        ret.put('values', vals);
+
+        req.put('hybrid_index_name', c_col_index);
+        apply_hybrid_search_params(
+          req, p_query, p_search_scorer, p_search_fusion,
+          p_vector_search_mode, p_vector_aggregator,
+          p_vector_score_weight, p_vector_rank_penalty,
+          p_text_contains, p_text_score_weight, p_text_rank_penalty
+        );
+        req.put('filter_by', fb);
+        req.put('return', ret);
+
+        l_col_res := DBMS_HYBRID_VECTOR.SEARCH(req.to_json);
+      END;
+
+      FOR r IN (
+        SELECT
+          c.object_id,
+          c.column_name,
+          c.data_type,
+          jt.score AS col_score_raw
+        FROM JSON_TABLE(
+               l_col_res,
+               '$[*]'
+               COLUMNS (
+                 rowid_txt VARCHAR2(200) PATH '$.rowid',
+                 score     NUMBER        PATH '$.score'
+               )
+             ) jt
+        JOIN all_cols_search_text c
+          ON c.rowid = CHARTOROWID(jt.rowid_txt)
+      )
+      LOOP
+        IF r.col_score_raw < l_threshold THEN
+          CONTINUE;
+        END IF;
+
+        l_cols.EXTEND;
+        l_cols(l_cols.COUNT).object_id     := r.object_id;
+        l_cols(l_cols.COUNT).column_name   := r.column_name;
+        l_cols(l_cols.COUNT).data_type     := r.data_type;
+        l_cols(l_cols.COUNT).col_score_raw := r.col_score_raw;
+      END LOOP;
+
+      /* ---- Group top columns per object ---- */
+      FOR i IN 1 .. l_objs.COUNT LOOP
+        l_counts(i) := 0;
+      END LOOP;
+
+      FOR i IN 1 .. l_cols.COUNT LOOP
+        DECLARE
+          obj_idx PLS_INTEGER;
+          tmp     t_col_rec;
+        BEGIN
+          obj_idx := l_obj_map(TO_CHAR(l_cols(i).object_id));
+          IF obj_idx IS NULL THEN
             CONTINUE;
           END IF;
-        END IF;
-        FOR j IN REVERSE 2 .. l_counts(obj_idx) LOOP
-          IF l_best(obj_idx)(j).col_norm > l_best(obj_idx)(j-1).col_norm THEN
-            tmp := l_best(obj_idx)(j-1);
-            l_best(obj_idx)(j-1) := l_best(obj_idx)(j);
-            l_best(obj_idx)(j) := tmp;
+          tmp := l_cols(i);
+          IF l_counts(obj_idx) < p_cols_per_obj THEN
+            l_counts(obj_idx) := l_counts(obj_idx) + 1;
+            l_best(obj_idx)(l_counts(obj_idx)) := tmp;
+          ELSE
+            IF tmp.col_score_raw > l_best(obj_idx)(l_counts(obj_idx)).col_score_raw THEN
+              l_best(obj_idx)(l_counts(obj_idx)) := tmp;
+            ELSE
+              CONTINUE;
+            END IF;
           END IF;
-        END LOOP;
-      END;
-    END LOOP;
-
-    /* ---- Rerank ---- */
-    FOR i IN 1 .. l_objs.COUNT LOOP
-      IF l_counts(i) IS NULL OR l_counts(i) = 0 THEN
-        l_objs(i).col_support := 0;
-      ELSE
-        DECLARE 
-          s NUMBER := 0; 
-          m PLS_INTEGER := l_counts(i);
-        BEGIN
-          FOR j IN 1 .. m LOOP 
-            s := s + l_best(i)(j).col_norm; 
+          FOR j IN REVERSE 2 .. l_counts(obj_idx) LOOP
+            IF l_best(obj_idx)(j).col_score_raw > l_best(obj_idx)(j-1).col_score_raw THEN
+              tmp := l_best(obj_idx)(j-1);
+              l_best(obj_idx)(j-1) := l_best(obj_idx)(j);
+              l_best(obj_idx)(j) := tmp;
+            END IF;
           END LOOP;
-          l_objs(i).col_support := s / m;
-        END;
-      END IF;
-      l_objs(i).final_score := 
-        clamp01(p_alpha * l_objs(i).obj_norm + (1 - p_alpha) * l_objs(i).col_support);
-    END LOOP;
-
-    /* ---- Emit top K ---- */
-    DECLARE
-      TYPE t_used_tab IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
-      l_used  t_used_tab;
-      out_arr JSON_ARRAY_T := JSON_ARRAY_T();
-      best_i  PLS_INTEGER;
-      best_s  NUMBER;
-    BEGIN
-      FOR pick IN 1 .. LEAST(p_k, l_objs.COUNT) LOOP
-        best_i := NULL; 
-        best_s := -1;
-        FOR i IN 1 .. l_objs.COUNT LOOP
-          IF l_used.EXISTS(i) AND l_used(i) THEN 
-            CONTINUE; 
-          END IF;
-          IF l_objs(i).final_score > best_s THEN 
-            best_s := l_objs(i).final_score; 
-            best_i := i; 
-          END IF;
-        END LOOP;
-        EXIT WHEN best_i IS NULL;
-        l_used(best_i) := TRUE;
-        DECLARE
-          o    JSON_OBJECT_T := JSON_OBJECT_T();
-          cols JSON_ARRAY_T  := JSON_ARRAY_T();
-        BEGIN
-          o.put('objectName', l_objs(best_i).object_name);
-          o.put('objectType', l_objs(best_i).object_type);
-          o.put('schema',     l_objs(best_i).owner);
-          o.put('score',      ROUND(l_objs(best_i).final_score, 6));
-          IF l_counts(best_i) IS NOT NULL AND l_counts(best_i) > 0 THEN
-            FOR j IN 1 .. l_counts(best_i) LOOP
-              DECLARE 
-                c JSON_OBJECT_T := JSON_OBJECT_T();
-              BEGIN
-                c.put('name',     l_best(best_i)(j).column_name);
-                c.put('dataType', l_best(best_i)(j).data_type);
-                cols.append(c);
-              END;
-            END LOOP;
-            o.put('columns', cols);
-          END IF;
-          out_arr.append(o);
         END;
       END LOOP;
-      p_result_json := out_arr.to_json;
-    END;
-  END discover_objects;
+
+      /* ---- Rerank ---- */
+      FOR i IN 1 .. l_objs.COUNT LOOP
+        IF l_counts(i) IS NULL OR l_counts(i) = 0 THEN
+          l_objs(i).col_support := 0;
+        ELSE
+          DECLARE
+            s NUMBER := 0;
+            m PLS_INTEGER := l_counts(i);
+          BEGIN
+            FOR j IN 1 .. m LOOP
+              s := s + l_best(i)(j).col_score_raw;
+            END LOOP;
+            l_objs(i).col_support := s / m;
+          END;
+        END IF;
+        l_objs(i).final_score :=
+          clamp01(p_alpha * l_objs(i).obj_score_raw + (1 - p_alpha) * l_objs(i).col_support);
+      END LOOP;
+
+      /* ---- Emit top K ---- */
+      DECLARE
+        TYPE t_used_tab IS TABLE OF BOOLEAN INDEX BY PLS_INTEGER;
+        l_used  t_used_tab;
+        out_arr JSON_ARRAY_T := JSON_ARRAY_T();
+        best_i  PLS_INTEGER;
+        best_s  NUMBER;
+      BEGIN
+        FOR pick IN 1 .. LEAST(p_k, l_objs.COUNT) LOOP
+          best_i := NULL;
+          best_s := -1;
+          FOR i IN 1 .. l_objs.COUNT LOOP
+            IF l_used.EXISTS(i) AND l_used(i) THEN
+              CONTINUE;
+            END IF;
+            IF l_objs(i).final_score > best_s THEN
+              best_s := l_objs(i).final_score;
+              best_i := i;
+            END IF;
+          END LOOP;
+          EXIT WHEN best_i IS NULL;
+          l_used(best_i) := TRUE;
+          DECLARE
+            o    JSON_OBJECT_T := JSON_OBJECT_T();
+            cols JSON_ARRAY_T  := JSON_ARRAY_T();
+          BEGIN
+            o.put('objectName', l_objs(best_i).object_name);
+            o.put('objectType', l_objs(best_i).object_type);
+            o.put('schema',     l_objs(best_i).owner);
+            o.put('score',      ROUND(l_objs(best_i).final_score, 6));
+            IF l_counts(best_i) IS NOT NULL AND l_counts(best_i) > 0 THEN
+              FOR j IN 1 .. l_counts(best_i) LOOP
+                DECLARE
+                  c JSON_OBJECT_T := JSON_OBJECT_T();
+                BEGIN
+                  c.put('name',     l_best(best_i)(j).column_name);
+                  c.put('dataType', l_best(best_i)(j).data_type);
+                  cols.append(c);
+                END;
+              END LOOP;
+              o.put('columns', cols);
+            END IF;
+            out_arr.append(o);
+          END;
+        END LOOP;
+        p_result_json := out_arr.to_json;
+      END;
+    END discover_objects;
+
 
   /* ======================================================================== */
   /* DISCOVER_OBJECTS_PARALLEL                                                */
@@ -1320,7 +1485,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     p_k                IN  PLS_INTEGER DEFAULT NULL,
     p_m                IN  PLS_INTEGER DEFAULT 10,
     p_cols_per_obj     IN  PLS_INTEGER DEFAULT 10,
-    p_score_threshold  IN  NUMBER      DEFAULT 0.6,
+    p_score_threshold  IN  NUMBER      DEFAULT 0.5,
     p_search_scorer IN  VARCHAR2    DEFAULT 'RSF',
     p_search_fusion IN  VARCHAR2    DEFAULT 'UNION',
     p_vector_search_mode  IN VARCHAR2 DEFAULT 'DOCUMENT',
@@ -1335,7 +1500,7 @@ CREATE OR REPLACE PACKAGE BODY developer AS
     c_uni_index CONSTANT VARCHAR2(128) := 'UNI_DISCOVERY_HVIX';
 
     l_n PLS_INTEGER := GREATEST(1, NVL(p_m, p_k * 10));
-    l_threshold NUMBER := GREATEST(0, LEAST(1, NVL(p_score_threshold, 0.6)));
+    l_threshold NUMBER := GREATEST(0, LEAST(1, NVL(p_score_threshold, 0.5)));
 
     l_res CLOB;
 
@@ -1453,9 +1618,8 @@ CREATE OR REPLACE PACKAGE BODY developer AS
       END;
       l_hits(i).score_norm := clamp01(l_hits(i).score_norm);
     END LOOP;
-
+    
     /* ---- Group by (owner, table_name), keep top p_cols_per_obj per object ---- */
-    /* ---- Only include columns whose normalized score >= l_threshold   ---- */
     FOR i IN 1 .. l_hits.COUNT LOOP
 
       -- ★ Score threshold gate: discard low-relevance column hits
@@ -1597,15 +1761,16 @@ CREATE PUBLIC SYNONYM developer FOR SYS.developer;
 -- /
 
 -- 2) Setup model + vectorizer + datastores + section groups + all 3 hybrid indexes
--- BEGIN
---   developer.setup_hybrid_search(
---     p_model_dir  => 'ONNX_IMPORT',
---     p_model_file => 'MiniLM.onnx',
---     p_model_name => 'ALL_MINILM_L6',
---     p_vectorizer => 'VEC_MINILM_IVF'
---   );
--- END;
--- /
+BEGIN
+  developer.setup_hybrid_search(
+    p_model_dir  => 'ONNX_IMPORT',
+    p_model_file => 'MiniLM.onnx',
+    p_model_name => 'ALL_MINILM_L6',
+    p_vectorizer => 'VEC_MINILM_IVF',
+    p_create_obj_col_indexes => FALSE
+  );
+END;
+/
 
 -- 3a) Sequential discovery
 -- DECLARE
