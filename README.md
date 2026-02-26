@@ -311,8 +311,9 @@ The runner now supports two request styles:
 - `--search-type hybrid`: sends hybrid vector+keyword arguments (scorer/fusion/vector/text knobs)
 
 When running with `--search-type hybrid`, if `--discover-text-contains` is not provided,
-the runner auto-generates `text.contains` keywords from the NL query in Python using NLTK
-tokenization + stopword filtering and joins terms with `OR`.
+the runner auto-generates `text.contains` keywords from the NL query in Python and joins
+terms with `OR`. It uses NLTK tokenization + stopword filtering when available, and
+falls back to built-in regex/stopword filtering when NLTK resources are unavailable.
 
 Example with parallel mode and grouped discovery config:
 
@@ -326,6 +327,7 @@ python run_hybrid_search_evaluation.py \
 
 Optional hybrid tuning flags:
 
+- `--discover-score-threshold`
 - `--discover-search-scorer`
 - `--discover-search-fusion`
 - `--discover-vector-search-mode`
