@@ -35,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 from run_hybrid_search_evaluation import calculate_precision_recall_f1_at_k
 
 
-DEFAULT_INPUT = "dev_with_metadata.json"
+DEFAULT_INPUT = "../dev_with_metadata.json"
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_TEST_SIZE = 3
 
