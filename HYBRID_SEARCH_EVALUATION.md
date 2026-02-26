@@ -128,6 +128,9 @@ Config tips for beginners:
   - `"dataset_forms": ["single-user", "multiple"]`
 - To pass extra arguments to every run, use `passthrough_args`, e.g.
   `"passthrough_args": ["--max-questions", "100"]`.
+- `scorer_overrides` now supports list values for sweep runs. Example:
+  - `"RSF": {"discover_vector_score_weight": [10], "discover_text_score_weight": [2,4,6]}`
+  - This creates 3 RSF variants automatically.
 
 Folder layout produced under `results/`:
 
@@ -136,8 +139,11 @@ results/
   unified/
     hybrid/
       rsf/
-        multiple/
-        single-user/
+        set1__discover_vector_score_weight-10__discover_text_score_weight-2/
+          multiple/
+          single-user/
+        set2__discover_vector_score_weight-10__discover_text_score_weight-4/
+          ...
       rrf/
         multiple/
         single-user/

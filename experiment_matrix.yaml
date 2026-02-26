@@ -5,40 +5,26 @@
 # 2) You can add comments on separate lines starting with '#'.
 # 3) To run multiple experiments for one field, add multiple values in the list.
 #
-# Example (multiple values):
-# "modes": ["unified", "parallel"]
-# "search_types": ["vector", "hybrid"]
-# "dataset_forms": ["single-user", "multiple"]
+# IMPORTANT FOR MULTIPLE RSF/RRF WEIGHT SETS:
+# You can pass list values inside scorer_overrides to auto-generate runs.
+# Example below runs RSF with text score weight = 2, 4, 6 (and vector weight fixed at 10).
 
 {
-  # Required DB connection for every experiment
   "connection_string": "xxx",
-
-  # Total 2 modes you asked for
   "modes": ["unified", "parallel"],
-
-  # For each mode, run both search types
   "search_types": ["vector", "hybrid"],
-
-  # Only used when search_type = hybrid
   "hybrid_scorers": ["RSF", "RRF"],
-
-  # Run both dataset forms:
-  # - single-user => --single-user-mode (union schema)
-  # - multiple    => individual schemas
   "dataset_forms": ["single-user", "multiple"],
 
-  # Common args passed to all experiments
   "common": {
     "discover_k": 10,
     "discover_score_threshold": 0.60
   },
 
-  # Scorer-specific args for hybrid runs
   "scorer_overrides": {
     "RSF": {
-      "discover_vector_score_weight": 10,
-      "discover_text_score_weight": 2
+      "discover_vector_score_weight": [10],
+      "discover_text_score_weight": [2, 4, 6]
     },
     "RRF": {
       "discover_vector_rank_penalty": 2,
@@ -46,11 +32,9 @@
     }
   },
 
-  # Output hierarchy root
   "results_root": "results",
 
   # Optional extra CLI args appended to every run
-  # Example:
   # "passthrough_args": ["--max-questions", "100"]
   "passthrough_args": []
 }

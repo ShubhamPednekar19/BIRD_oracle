@@ -5,11 +5,10 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
-
-import json
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -66,10 +65,61 @@ def _validate(config: dict[str, Any]) -> None:
         raise ValueError(f"Unsupported dataset_forms: {bad_forms}; allowed={sorted(allowed_forms)}")
 
 
-def _experiment_path(results_root: Path, mode: str, search_type: str, scorer: str | None, dataset_form: str) -> Path:
+def _expand_scorer_variants(config: dict[str, Any], scorer: str | None) -> list[tuple[str, dict[str, Any]]]:
+    if scorer is None:
+        return [("base", {})]
+
+    raw_override = (config.get("scorer_overrides") or {}).get(scorer, {})
+    if not raw_override:
+        return [("base", {})]
+
+    # Option A: explicit list of override sets
+    # "RSF": [{"discover_text_score_weight": 2}, {"discover_text_score_weight": 4}]
+    if isinstance(raw_override, list):
+        variants: list[tuple[str, dict[str, Any]]] = []
+        for i, entry in enumerate(raw_override, start=1):
+            if not isinstance(entry, dict):
+                raise ValueError(f"scorer_overrides.{scorer}[{i - 1}] must be an object")
+            variants.append((f"set{i}", entry))
+        return variants
+
+    if not isinstance(raw_override, dict):
+        raise ValueError(f"scorer_overrides.{scorer} must be an object or list of objects")
+
+    # Option B: cartesian expansion of list-valued fields
+    # "RSF": {"discover_vector_score_weight": [10], "discover_text_score_weight": [2,4,6]}
+    list_keys = [k for k, v in raw_override.items() if isinstance(v, list)]
+    if not list_keys:
+        return [("base", raw_override)]
+
+    scalar_items = {k: v for k, v in raw_override.items() if not isinstance(v, list)}
+    list_values = [raw_override[k] for k in list_keys]
+
+    variants = []
+    for idx, combo in enumerate(itertools.product(*list_values), start=1):
+        override = dict(scalar_items)
+        label_parts = []
+        for k, val in zip(list_keys, combo):
+            override[k] = val
+            label_parts.append(f"{k}-{val}")
+        label = f"set{idx}__" + "__".join(label_parts)
+        variants.append((label, override))
+    return variants
+
+
+def _experiment_path(
+    results_root: Path,
+    mode: str,
+    search_type: str,
+    scorer: str | None,
+    variant_label: str,
+    dataset_form: str,
+) -> Path:
     parts = [results_root, mode, search_type]
     if scorer:
         parts.append(scorer.lower())
+        if variant_label != "base":
+            parts.append(variant_label)
     parts.append(dataset_form)
     out = Path(parts[0])
     for p in parts[1:]:
@@ -77,7 +127,15 @@ def _experiment_path(results_root: Path, mode: str, search_type: str, scorer: st
     return out
 
 
-def _build_command(config: dict[str, Any], mode: str, search_type: str, scorer: str | None, dataset_form: str, out_dir: Path) -> list[str]:
+def _build_command(
+    config: dict[str, Any],
+    mode: str,
+    search_type: str,
+    scorer: str | None,
+    scorer_override: dict[str, Any],
+    dataset_form: str,
+    out_dir: Path,
+) -> list[str]:
     common = config.get("common", {})
 
     cmd = [
@@ -106,16 +164,15 @@ def _build_command(config: dict[str, Any], mode: str, search_type: str, scorer: 
 
     if search_type == "hybrid" and scorer:
         cmd.extend(["--discover-search-scorer", scorer])
-        override = (config.get("scorer_overrides") or {}).get(scorer, {})
 
-        if "discover_vector_rank_penalty" in override:
-            cmd.extend(["--discover-vector-rank-penalty", str(override["discover_vector_rank_penalty"])])
-        if "discover_text_rank_penalty" in override:
-            cmd.extend(["--discover-text-rank-penalty", str(override["discover_text_rank_penalty"])])
-        if "discover_vector_score_weight" in override:
-            cmd.extend(["--discover-vector-score-weight", str(override["discover_vector_score_weight"])])
-        if "discover_text_score_weight" in override:
-            cmd.extend(["--discover-text-score-weight", str(override["discover_text_score_weight"])])
+        if "discover_vector_rank_penalty" in scorer_override:
+            cmd.extend(["--discover-vector-rank-penalty", str(scorer_override["discover_vector_rank_penalty"])])
+        if "discover_text_rank_penalty" in scorer_override:
+            cmd.extend(["--discover-text-rank-penalty", str(scorer_override["discover_text_rank_penalty"])])
+        if "discover_vector_score_weight" in scorer_override:
+            cmd.extend(["--discover-vector-score-weight", str(scorer_override["discover_vector_score_weight"])])
+        if "discover_text_score_weight" in scorer_override:
+            cmd.extend(["--discover-text-score-weight", str(scorer_override["discover_text_score_weight"])])
 
     passthrough = config.get("passthrough_args", [])
     if passthrough:
@@ -145,22 +202,29 @@ def main() -> int:
         scorers = config.get("hybrid_scorers", []) if search_type == "hybrid" else [None]
 
         for scorer in scorers:
-            out_dir = _experiment_path(results_root, mode, search_type, scorer, dataset_form)
-            out_dir.mkdir(parents=True, exist_ok=True)
+            scorer_variants = _expand_scorer_variants(config, scorer)
+            for variant_label, scorer_override in scorer_variants:
+                out_dir = _experiment_path(results_root, mode, search_type, scorer, variant_label, dataset_form)
+                out_dir.mkdir(parents=True, exist_ok=True)
 
-            cmd = _build_command(config, mode, search_type, scorer, dataset_form, out_dir)
-            total += 1
+                cmd = _build_command(
+                    config, mode, search_type, scorer, scorer_override, dataset_form, out_dir
+                )
+                total += 1
 
-            print(f"\n[{total}] mode={mode} search_type={search_type} scorer={scorer or '-'} dataset={dataset_form}")
-            print(" ".join(cmd))
+                print(
+                    f"\n[{total}] mode={mode} search_type={search_type} "
+                    f"scorer={scorer or '-'} variant={variant_label} dataset={dataset_form}"
+                )
+                print(" ".join(cmd))
 
-            if args.dry_run:
-                continue
+                if args.dry_run:
+                    continue
 
-            completed = subprocess.run(cmd, check=False)
-            if completed.returncode != 0:
-                failures += 1
-                print(f"Experiment failed with exit code {completed.returncode}")
+                completed = subprocess.run(cmd, check=False)
+                if completed.returncode != 0:
+                    failures += 1
+                    print(f"Experiment failed with exit code {completed.returncode}")
 
     print(f"\nCompleted {total} experiments. Failures: {failures}")
     return 1 if failures else 0
