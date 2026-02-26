@@ -69,6 +69,49 @@ def _normalize_json_text(raw: str) -> str:
     return re.sub(r"\s+", " ", raw).strip()
 
 
+
+
+def _format_hms(total_seconds: float) -> str:
+    secs = max(0, int(total_seconds))
+    h, rem = divmod(secs, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+def _print_progress(done: int, total: int, started_at: float) -> None:
+    if total <= 0:
+        return
+    elapsed = time.time() - started_at
+    rate = done / elapsed if elapsed > 0 else 0.0
+    eta_seconds = (total - done) / rate if rate > 0 else 0.0
+    percent = (done / total) * 100
+
+    bar_width = 30
+    filled = int((done / total) * bar_width)
+    bar = "#" * filled + "-" * (bar_width - filled)
+
+    msg = (
+        f"\rProgress [{bar}] {done}/{total} ({percent:5.1f}%) "
+        f"Elapsed: {_format_hms(elapsed)} ETA: {_format_hms(eta_seconds)}"
+    )
+    print(msg, end="", flush=True)
+
+
+def _payload_to_text(payload) -> str:
+    """Convert DB payload to JSON string, handling CLOB/LOB values."""
+    if payload is None:
+        return ""
+    if isinstance(payload, (str, bytes, bytearray)):
+        if isinstance(payload, (bytes, bytearray)):
+            return payload.decode("utf-8", errors="replace")
+        return payload
+    if hasattr(payload, "read"):
+        data = payload.read()
+        if isinstance(data, (bytes, bytearray)):
+            return data.decode("utf-8", errors="replace")
+        return str(data)
+    return str(payload)
+
 def extract_tables_from_showprompt(showprompt_payload: str) -> List[str]:
     """Extract table names from SYSTEM blocks up to the USER block."""
     data = json.loads(showprompt_payload)
@@ -135,7 +178,8 @@ def evaluate_item(cursor, item: dict, profile_name: str) -> EvalRow:
     try:
         cursor.execute(sql, prompt=prompt, profile_name=profile_name)
         payload = cursor.fetchone()[0]
-        row.discovered_tables = extract_tables_from_showprompt(payload)
+        payload_text = _payload_to_text(payload)
+        row.discovered_tables = extract_tables_from_showprompt(payload_text)
 
         expected_set: Set[str] = set(row.expected_tables)
         discovered_ranked: List[str] = row.discovered_tables
@@ -266,16 +310,19 @@ def main() -> int:
     cur = conn.cursor()
 
     start = time.time()
+    total_items = len(items)
     try:
         for idx, item in enumerate(items, start=1):
             row = evaluate_item(cur, item, args.profile_name)
             all_rows.append(row)
+            _print_progress(idx, total_items, start)
 
             if idx % args.batch_size == 0:
                 batch_id = idx // args.batch_size
                 batch_rows = all_rows[idx - args.batch_size:idx]
                 batch_path = out_dir / f"select_ai_retrieval_batch_{batch_id:03d}.html"
                 write_html(batch_rows, batch_path, f"Select AI Retrieval Evaluation - Batch {batch_id}")
+                print()
                 print(f"Wrote {batch_path}")
 
         if len(all_rows) % args.batch_size:
@@ -284,6 +331,7 @@ def main() -> int:
             batch_rows = all_rows[start_idx:]
             batch_path = out_dir / f"select_ai_retrieval_batch_{batch_id:03d}.html"
             write_html(batch_rows, batch_path, f"Select AI Retrieval Evaluation - Batch {batch_id}")
+            print()
             print(f"Wrote {batch_path}")
 
         full_title = "Select AI Retrieval Evaluation - Full"
@@ -291,6 +339,7 @@ def main() -> int:
             full_title = f"Select AI Retrieval Evaluation - Test ({len(all_rows)} questions)"
         full_path = out_dir / "select_ai_retrieval_full.html"
         write_html(all_rows, full_path, full_title)
+        print()
         print(f"Wrote {full_path}")
         print(f"Done in {time.time() - start:.2f}s")
     finally:

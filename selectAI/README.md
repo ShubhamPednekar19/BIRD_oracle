@@ -63,6 +63,10 @@ python selectAI/run_select_ai_retrieval_evaluation.py \
   --test-size 3
 ```
 
+
+- During execution, the script prints a live progress bar with completed questions, percentage, elapsed time, and ETA.
+- The script handles `DBMS_CLOUD_AI.GENERATE` responses returned as CLOB/LOB by reading them before JSON parsing.
+
 ## Output
 
 By default reports are written to `select_ai_retrieval_eval/`:
