@@ -105,6 +105,61 @@ python run_hybrid_search_evaluation.py \
 
 ### HTML Report Output
 
+
+### YAML-Driven Experiment Matrix Runner
+
+To run all requested combinations (mode/search-type/scorer/dataset-form) with separate output folders, use:
+
+```bash
+python run_experiment_matrix.py --config experiment_matrix.yaml
+```
+
+Dry run (print commands only):
+
+```bash
+python run_experiment_matrix.py --config experiment_matrix.yaml --dry-run
+```
+
+Config tips for beginners:
+- `experiment_matrix.yaml` supports **comment-only** lines that start with `#`.
+- To run multiple values for a field, put them in a list. Example:
+  - `"modes": ["unified", "parallel"]`
+  - `"search_types": ["vector", "hybrid"]`
+  - `"dataset_forms": ["single-user", "multiple"]`
+- To pass extra arguments to every run, use `passthrough_args`, e.g.
+  `"passthrough_args": ["--max-questions", "100"]`.
+- `scorer_overrides` now supports list values for sweep runs. Example:
+  - `"RSF": {"discover_vector_score_weight": [10], "discover_text_score_weight": [2,4,6]}`
+  - This creates 3 RSF variants automatically.
+
+Folder layout produced under `results/`:
+
+```text
+results/
+  unified/
+    hybrid/
+      rsf/
+        set1__discover_vector_score_weight-10__discover_text_score_weight-2/
+          multiple/
+          single-user/
+        set2__discover_vector_score_weight-10__discover_text_score_weight-4/
+          ...
+      rrf/
+        multiple/
+        single-user/
+    vector/
+      multiple/
+      single-user/
+  parallel/
+    ... (same pattern)
+```
+
+Each leaf directory contains:
+- `results.csv`
+- `summary.csv`
+- `report.html`
+
+
 An HTML report is now always generated. By default it is saved as `report.html`:
 
 ```bash
@@ -217,7 +272,6 @@ resources are unavailable.
 Override precedence: explicit CLI flags > `--discover-config-json` > built-in defaults.
 
 ## Output Files
-
 ### Results CSV (`hybrid_search_evaluation_results.csv`)
 
 Per-query detailed results:
