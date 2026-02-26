@@ -32,10 +32,20 @@ Run from the repository root:
 
 ```bash
 python selectAI/run_select_ai_retrieval_evaluation.py \
-  --connection-string "user/password@host:port/service" \
+  --username USERNAME \
+  --password PASSWORD \
+  --dsn host:port/service \
   --profile-name GPT \
   --batch-size 100 \
   --output-dir select_ai_retrieval_eval
+```
+
+Alternative (legacy):
+
+```bash
+python selectAI/run_select_ai_retrieval_evaluation.py \
+  --connection-string "user/password@host:port/service" \
+  --profile-name GPT
 ```
 
 
@@ -45,7 +55,9 @@ To run only a small smoke test (2-3 questions), use `--test` and optionally `--t
 
 ```bash
 python selectAI/run_select_ai_retrieval_evaluation.py \
-  --connection-string "user/password@host:port/service" \
+  --username USERNAME \
+  --password PASSWORD \
+  --dsn host:port/service \
   --profile-name GPT \
   --test \
   --test-size 3

@@ -230,7 +230,10 @@ th {{ background: #f5f5f5; position: sticky; top: 0; }}
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate Select AI retrieval over dev_with_metadata.json")
-    parser.add_argument("--connection-string", required=True, help="Oracle connection string user/password@host:port/service")
+    parser.add_argument("--connection-string", help="Oracle connection string user/password@host:port/service")
+    parser.add_argument("--username", help="Oracle username (recommended with --password and --dsn)")
+    parser.add_argument("--password", help="Oracle password (recommended with --username and --dsn)")
+    parser.add_argument("--dsn", help="Oracle DSN, e.g. host:port/service_name")
     parser.add_argument("--profile-name", default="GPT", help="DBMS_CLOUD_AI profile name (default: GPT)")
     parser.add_argument("--input", default=DEFAULT_INPUT, help=f"Input metadata JSON file (default: {DEFAULT_INPUT})")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size for partial HTML outputs")
@@ -249,7 +252,17 @@ def main() -> int:
 
     all_rows: List[EvalRow] = []
 
-    conn = oracledb.connect(args.connection_string)
+    if args.username or args.password or args.dsn:
+        if not (args.username and args.password and args.dsn):
+            parser.error("When using split credentials, provide --username, --password, and --dsn together")
+
+    if args.connection_string:
+        conn = oracledb.connect(args.connection_string)
+    elif args.username and args.password and args.dsn:
+        conn = oracledb.connect(user=args.username, password=args.password, dsn=args.dsn)
+    else:
+        parser.error("Provide either --connection-string OR --username/--password/--dsn")
+
     cur = conn.cursor()
 
     start = time.time()
