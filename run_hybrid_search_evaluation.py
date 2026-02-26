@@ -115,7 +115,7 @@ class DiscoveryConfig:
     cols_per_obj: int = 5
     alpha: float = 0.65
     parallel_alpha: float = 0.60
-    unified_score_threshold: float = 0.60
+    score_threshold: float = 60.0
 
     # Search behavior
     search_type: str = 'vector'  # vector | hybrid
@@ -296,7 +296,12 @@ def build_text_contains_from_query(text: str) -> Optional[str]:
 
             tokens = word_tokenize(text)
             stop_words = set(stopwords.words('english'))
-            keywords = [w.lower() for w in tokens if w.isalpha() and w.lower() not in stop_words and 'tr' not in w.lower()]
+            keywords = [w.lower() for w in tokens if w.isalpha() and w.lower() 
+                        not in stop_words and 
+                        'tr' not in w.lower() and 
+                        'pt' not in w.lower() and
+                        'within' not in w.lower() and 
+                        'pattern' not in w.lower()]
 
             # preserve appearance order while deduplicating
             seen = set()
@@ -317,7 +322,7 @@ def build_text_contains_from_query(text: str) -> Optional[str]:
         'under','again','further','than','once','here','there','all','any','both','each','few','more','most','other',
         'some','such','no','nor','not','only','own','same','so','too','very','can','will','just','should','now','of',
         'is','are','was','were','be','been','being','have','has','had','do','does','did','as','it','its','their','them',
-        'they','this','that','these','those','what','which','who','whom','why','how','please','list', 'tr'
+        'they','this','that','these','those','what','which','who','whom','why','how','please','list', 'tr', 'pt', 'within','pattern'
     }
     words = re.findall(r'[A-Za-z]+', text)
     seen = set()
@@ -811,7 +816,7 @@ class OracleManager:
                          hints: Optional[str] = None, n: int = 10,
                          m: Optional[int] = None, alpha: float = 0.65,
                          parallel_alpha: float = 0.60,
-                         unified_score_threshold: float = 0.60,
+                         score_threshold: float = 60.0,
                          search_type: str = 'vector',
                          search_scorer: str = 'RSF', search_fusion: str = 'UNION',
                          vector_search_mode: str = 'DOCUMENT', vector_aggregator: str = 'MAX',
@@ -832,7 +837,7 @@ class OracleManager:
             m: Optional topN for column search (parallel discover_objects_parallel p_m)
             alpha: Weight for sequential rerank
             parallel_alpha: Weight for parallel rerank
-            unified_score_threshold: Score threshold for unified discovery
+            score_threshold: Score threshold for unified discovery
 
         Returns:
             Tuple of (list of discovered objects, execution time in ms)
@@ -862,20 +867,17 @@ class OracleManager:
                     m,              # p_m
                     cols_per_obj,   # p_cols_per_obj
                     parallel_alpha, # p_alpha
+                    search_scorer,
+                    search_fusion,
+                    vector_search_mode,
+                    vector_aggregator,
+                    vector_score_weight,
+                    vector_rank_penalty,
+                    effective_text_contains,
+                    text_score_weight,
+                    text_rank_penalty,
+                    result_json
                 ]
-                if use_hybrid:
-                    proc_args.extend([
-                        search_scorer,
-                        search_fusion,
-                        vector_search_mode,
-                        vector_aggregator,
-                        vector_score_weight,
-                        vector_rank_penalty,
-                        effective_text_contains,
-                        text_score_weight,
-                        text_rank_penalty,
-                    ])
-                proc_args.append(result_json)  # p_result_json (OUT)
                 cursor.callproc('developer.discover_objects_parallel', proc_args)
             elif discovery_mode == 'unified':
                 proc_args = [
@@ -883,7 +885,7 @@ class OracleManager:
                     k,                       # p_k
                     n,                       # p_n
                     cols_per_obj,            # p_cols_per_obj
-                    unified_score_threshold, # p_score_threshold
+                    score_threshold, # p_score_threshold
                     search_scorer,
                     search_fusion,
                     vector_search_mode,
@@ -904,20 +906,18 @@ class OracleManager:
                     n,          # p_n
                     cols_per_obj,  # p_cols_per_obj
                     alpha,      # p_alpha
+                    score_threshold, # p_score_threshold
+                    search_scorer,
+                    search_fusion,
+                    vector_search_mode,
+                    vector_aggregator,
+                    vector_score_weight,
+                    vector_rank_penalty,
+                    effective_text_contains,
+                    text_score_weight,
+                    text_rank_penalty,
+                    result_json
                 ]
-                if use_hybrid:
-                    proc_args.extend([
-                        search_scorer,
-                        search_fusion,
-                        vector_search_mode,
-                        vector_aggregator,
-                        vector_score_weight,
-                        vector_rank_penalty,
-                        effective_text_contains,
-                        text_score_weight,
-                        text_rank_penalty,
-                    ])
-                proc_args.append(result_json)  # p_result_json (OUT)
                 cursor.callproc('developer.discover_objects', proc_args)
 
             end_time = time.perf_counter()
@@ -970,7 +970,7 @@ class OracleManager:
             n=n,
             cols_per_obj=cols_per_obj,
             discovery_mode='unified',
-            unified_score_threshold=score_threshold,
+            score_threshold=score_threshold,
             search_type=search_type,
             search_scorer=search_scorer,
             search_fusion=search_fusion,
@@ -1350,120 +1350,165 @@ def calculate_topn_accuracy(
 
     return table_accuracy, column_accuracy
 
-
 def evaluate_result(expected_tables: List[ExpectedObject],
                    discovered: List[DiscoveredObject],
                    eval_k: int = 10) -> Dict:
-    """
-    Evaluate discovered objects against expected.
 
-    Args:
-        expected_tables: List of expected table objects
-        discovered: List of discovered objects
-
-    Returns:
-        Dictionary with evaluation metrics
-    """
-    # Extract expected table names and columns
+    # ==========================================================
+    # Expected tables & columns
+    # ==========================================================
     expected_table_names = {t.table_name for t in expected_tables}
-    expected_column_names = set()
-    for t in expected_tables:
-        expected_column_names.update(t.columns)
 
-    # Extract discovered table names and columns
+    expected_cols_map = {
+        t.table_name: [c.lower() for c in t.columns]
+        for t in expected_tables
+    }
+
+    # ==========================================================
+    # Discovered tables & ordered columns
+    # ==========================================================
     discovered_table_names = [d.object_name for d in discovered]
-    discovered_column_names = set()
-    discovered_column_ordered = []
-    seen_cols = set()
+
+    discovered_cols_map = {}
     for d in discovered:
+        seen_cols = set()
+        ordered_cols = []
         for col in d.columns:
-            col_name = col['name']
-            discovered_column_names.add(col_name)
-            c_lower = col_name.lower()
+            c_lower = col['name'].lower()
             if c_lower not in seen_cols:
                 seen_cols.add(c_lower)
-                discovered_column_ordered.append(col_name)
+                ordered_cols.append(c_lower)
+        discovered_cols_map[d.object_name] = ordered_cols
 
-    # Basic metrics (Precision, Recall, F1)
+    # ==========================================================
+    # Table-level metrics
+    # ==========================================================
     table_p, table_r, table_f1 = calculate_precision_recall_f1(
         expected_table_names, set(discovered_table_names)
     )
 
-    col_p, col_r, col_f1 = calculate_precision_recall_f1(
-        expected_column_names, discovered_column_names
+    # ==========================================================
+    # Column metrics (Macro Average per table)
+    # ==========================================================
+    p_list, r_list = [], []
+
+    for table in expected_table_names:
+        exp_cols = set(expected_cols_map.get(table, []))
+        disc_cols = set(discovered_cols_map.get(table, []))
+
+        p, r, _ = calculate_precision_recall_f1(exp_cols, disc_cols)
+
+        p_list.append(p)
+        r_list.append(r)
+
+    col_p = sum(p_list)/len(p_list) if p_list else 0
+    col_r = sum(r_list)/len(r_list) if r_list else 0
+
+    col_f1 = (
+        2 * col_p * col_r / (col_p + col_r)
+        if (col_p + col_r) > 0 else 0
     )
 
-    # Hit@k metrics (binary: any expected in top-k?)
+    # ==========================================================
+    # Column Precision/Recall/F1 @K (Macro Average)
+    # ==========================================================
+    def column_metrics_at_k(k):
+        p_k_list, r_k_list = [], []
+
+        for table in expected_table_names:
+            exp_cols = set(expected_cols_map.get(table, []))
+            disc_cols = discovered_cols_map.get(table.upper(), [])[:k]
+
+            p, r, _ = calculate_precision_recall_f1(exp_cols, set(disc_cols))
+
+            p_k_list.append(p)
+            r_k_list.append(r)
+
+        avg_p = sum(p_k_list)/len(p_k_list) if p_k_list else 0
+        avg_r = sum(r_k_list)/len(r_k_list) if r_k_list else 0
+
+        avg_f1 = (
+            2 * avg_p * avg_r / (avg_p + avg_r)
+            if (avg_p + avg_r) > 0 else 0
+        )
+
+        return avg_p, avg_r, avg_f1
+
+    col_p_at_1, col_r_at_1, col_f1_at_1 = column_metrics_at_k(1)
+    col_p_at_3, col_r_at_3, col_f1_at_3 = column_metrics_at_k(3)
+    col_p_at_5, col_r_at_5, col_f1_at_5 = column_metrics_at_k(5)
+    col_p_at_k, col_r_at_k, col_f1_at_k = column_metrics_at_k(eval_k)
+
+    # ==========================================================
+    # Ranking metrics (tables)
+    # ==========================================================
     hit_at_1 = calculate_hit_at_k(expected_table_names, discovered_table_names, 1)
     hit_at_3 = calculate_hit_at_k(expected_table_names, discovered_table_names, 3)
     hit_at_5 = calculate_hit_at_k(expected_table_names, discovered_table_names, 5)
 
-    # Recall@k metrics (fraction of expected in top-k - better for multi-table)
     recall_at_3 = calculate_recall_at_k(expected_table_names, discovered_table_names, 3)
     recall_at_5 = calculate_recall_at_k(expected_table_names, discovered_table_names, 5)
     recall_at_10 = calculate_recall_at_k(expected_table_names, discovered_table_names, 10)
     recall_at_k = calculate_recall_at_k(expected_table_names, discovered_table_names, eval_k)
 
-    table_p_at_1, _, table_f1_at_1 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 1)
-    table_p_at_3, _, table_f1_at_3 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 3)
-    table_p_at_5, _, table_f1_at_5 = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, 5)
-    table_p_at_k, _, table_f1_at_k = calculate_precision_recall_f1_at_k(expected_table_names, discovered_table_names, eval_k)
+    table_p_at_1, _, table_f1_at_1 = calculate_precision_recall_f1_at_k(
+        expected_table_names, discovered_table_names, 1
+    )
+    table_p_at_3, _, table_f1_at_3 = calculate_precision_recall_f1_at_k(
+        expected_table_names, discovered_table_names, 3
+    )
+    table_p_at_5, _, table_f1_at_5 = calculate_precision_recall_f1_at_k(
+        expected_table_names, discovered_table_names, 5
+    )
+    table_p_at_k, _, table_f1_at_k = calculate_precision_recall_f1_at_k(
+        expected_table_names, discovered_table_names, eval_k
+    )
 
-    col_p_at_1, col_r_at_1, col_f1_at_1 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 1)
-    col_p_at_3, col_r_at_3, col_f1_at_3 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 3)
-    col_p_at_5, col_r_at_5, col_f1_at_5 = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, 5)
-    col_p_at_k, col_r_at_k, col_f1_at_k = calculate_precision_recall_f1_at_k(expected_column_names, discovered_column_ordered, eval_k)
-
-    # MRR (ranking quality)
     mrr = calculate_mrr(expected_table_names, discovered_table_names)
-
-    # Jaccard similarity
     jaccard = calculate_jaccard(expected_table_names, set(discovered_table_names))
-
-    # Exact match (strict evaluation)
     exact_match = calculate_exact_match(expected_table_names, set(discovered_table_names))
 
-    # Joint table-column metrics (column correct only if table also found)
     joint_col_p, joint_col_r, joint_col_f1 = calculate_joint_column_metrics(
         expected_tables, discovered
     )
 
-    # Top-N Accuracy (positional)
     topn_table_acc, topn_col_acc = calculate_topn_accuracy(
         expected_tables, discovered
     )
 
-    # Build structured JSON for expected and discovered
-    expected_json_data = []
-    for t in expected_tables:
-        expected_json_data.append({
-            'table': t.table_name,
-            'columns': t.columns
-        })
+    # ==========================================================
+    # JSON structured outputs
+    # ==========================================================
+    expected_json_data = [
+        {'table': t.table_name, 'columns': t.columns}
+        for t in expected_tables
+    ]
 
-    discovered_json_data = []
-    for d in discovered:
-        discovered_json_data.append({
+    discovered_json_data = [
+        {
             'table': d.object_name,
             'score': round(float(d.score), 4),
             'columns': [col['name'] for col in d.columns]
-        })
+        }
+        for d in discovered
+    ]
 
+    # ==========================================================
+    # Final return dictionary
+    # ==========================================================
     return {
-        # Basic metrics
         'table_precision': table_p,
         'table_recall': table_r,
         'table_f1': table_f1,
+
         'column_precision': col_p,
         'column_recall': col_r,
         'column_f1': col_f1,
 
-        # Hit@k (binary)
         'hit_at_1': hit_at_1,
         'hit_at_3': hit_at_3,
         'hit_at_5': hit_at_5,
 
-        # Recall@k (fraction - better for multi-table)
         'recall_at_3': recall_at_3,
         'recall_at_5': recall_at_5,
         'recall_at_10': recall_at_10,
@@ -1473,48 +1518,45 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         'table_precision_at_3': table_p_at_3,
         'table_precision_at_5': table_p_at_5,
         'table_precision_at_k': table_p_at_k,
+
         'table_f1_at_1': table_f1_at_1,
         'table_f1_at_3': table_f1_at_3,
         'table_f1_at_5': table_f1_at_5,
         'table_f1_at_k': table_f1_at_k,
 
+        'column_recall_at_1': col_r_at_1,
         'column_recall_at_3': col_r_at_3,
         'column_recall_at_5': col_r_at_5,
         'column_recall_at_k': col_r_at_k,
+
         'column_precision_at_1': col_p_at_1,
         'column_precision_at_3': col_p_at_3,
         'column_precision_at_5': col_p_at_5,
         'column_precision_at_k': col_p_at_k,
+
         'column_f1_at_1': col_f1_at_1,
         'column_f1_at_3': col_f1_at_3,
         'column_f1_at_5': col_f1_at_5,
         'column_f1_at_k': col_f1_at_k,
 
-        # Advanced metrics
         'mrr': mrr,
         'jaccard': jaccard,
         'exact_match': exact_match,
 
-        # Joint table-column metrics
         'joint_column_precision': joint_col_p,
         'joint_column_recall': joint_col_r,
         'joint_column_f1': joint_col_f1,
 
-        # Top-N Accuracy
         'topn_table_accuracy': topn_table_acc,
         'topn_column_accuracy': topn_col_acc,
 
-        # Structured JSON
         'expected_json': json.dumps(expected_json_data),
         'discovered_json': json.dumps(discovered_json_data),
 
-        # Raw data
         'discovered_tables': discovered_table_names,
-        'discovered_columns': list(discovered_column_names),
         'num_expected_tables': len(expected_table_names),
-        'num_expected_columns': len(expected_column_names),
+        'num_expected_columns': sum(len(v) for v in expected_cols_map.values()),
     }
-
 
 # ============================================================================
 # Data Loading
@@ -1613,7 +1655,6 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
                 'expected_tables': '|'.join(result.expected_tables),
                 'expected_columns': '|'.join(result.expected_columns[:10]),  # Limit
                 'discovered_tables': '|'.join(result.discovered_tables),
-                'discovered_columns': '|'.join(result.discovered_columns[:10]),
                 # Basic metrics
                 'table_precision': f"{result.table_precision:.4f}",
                 'table_recall': f"{result.table_recall:.4f}",
@@ -1973,10 +2014,60 @@ def generate_results_html(results: List[EvaluationResult],
     total_successful = sum(s.successful_queries for s in summaries)
     total_failed = total_questions - total_successful
     overall_f1 = 0.0
+    overall_precision = 0.0
+    overall_recall = 0.0
     overall_hit1 = 0.0
+    overall_column_f1 = 0.0
+    overall_column_precision = 0.0
+    overall_column_recall = 0.0
+    overall_hit3 = 0.0
+    overall_hit5 = 0.0
+    overall_f1_at_3 = 0.0
+    overall_precision_at_3 = 0.0
+    overall_recall_at_3 = 0.0
+    overall_column_f1_at_3 = 0.0
+    overall_column_precision_at_3 = 0.0
+    overall_column_recall_at_3 = 0.0
+    overall_f1_at_5 = 0.0
+    overall_precision_at_5 = 0.0
+    overall_recall_at_5 = 0.0
+    overall_column_f1_at_5 = 0.0
+    overall_column_precision_at_5 = 0.0
+    overall_column_recall_at_5 = 0.0
+    overall_f1_at_k = 0.0
+    overall_precision_at_k = 0.0
+    overall_recall_at_k = 0.0
+    overall_column_f1_at_k = 0.0
+    overall_column_precision_at_k = 0.0
+    overall_column_recall_at_k = 0.0
     if total_successful > 0:
+        overall_precision = sum(s.avg_table_precision * s.successful_queries for s in summaries) / total_successful
+        overall_recall = sum(s.avg_table_recall * s.successful_queries for s in summaries) / total_successful
         overall_f1 = sum(s.avg_table_f1 * s.successful_queries for s in summaries) / total_successful
         overall_hit1 = sum(s.table_hit_at_1_rate * s.successful_queries for s in summaries) / total_successful
+        overall_hit3 = sum(s.table_hit_at_3_rate * s.successful_queries for s in summaries) / total_successful
+        overall_hit5 = sum(s.table_hit_at_5_rate * s.successful_queries for s in summaries) / total_successful
+        overall_f1_at_3 = sum(s.avg_table_f1_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_precision_at_3 = sum(s.avg_table_precision_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_recall_at_3 = sum(s.avg_table_recall_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_f1_at_5 = sum(s.avg_table_f1_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_precision_at_5 = sum(s.avg_table_precision_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_recall_at_5 = sum(s.avg_table_recall_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_f1_at_k = sum(s.avg_table_f1_at_k * s.successful_queries for s in summaries) / total_successful
+        overall_precision_at_k = sum(s.avg_table_precision_at_k * s.successful_queries for s in summaries) / total_successful
+        overall_recall_at_k = sum(s.avg_table_recall_at_k * s.successful_queries for s in summaries) / total_successful
+        overall_column_precision = sum(s.avg_column_precision * s.successful_queries for s in summaries) / total_successful
+        overall_column_recall = sum(s.avg_column_recall * s.successful_queries for s in summaries) / total_successful
+        overall_column_f1 = sum(s.avg_column_f1 * s.successful_queries for s in summaries) / total_successful
+        overall_column_f1_at_3 = sum(s.avg_column_f1_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_column_precision_at_3 = sum(s.avg_column_precision_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_column_recall_at_3 = sum(s.avg_column_recall_at_3 * s.successful_queries for s in summaries) / total_successful
+        overall_column_f1_at_5 = sum(s.avg_column_f1_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_column_precision_at_5 = sum(s.avg_column_precision_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_column_recall_at_5 = sum(s.avg_column_recall_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_column_f1_at_k = sum(s.avg_column_f1_at_k * s.successful_queries for s in summaries) / total_successful
+        overall_column_precision_at_k = sum(s.avg_column_precision_at_k * s.successful_queries for s in summaries) / total_successful
+        overall_column_recall_at_k = sum(s.avg_column_recall_at_k * s.successful_queries for s in summaries) / total_successful
 
     # --- Build params table rows ---
     param_rows = ""
@@ -2204,8 +2295,33 @@ def generate_results_html(results: List[EvaluationResult],
   <div class="card"><div class="value">{total_questions}</div><div class="label">Total Questions</div></div>
   <div class="card"><div class="value">{total_successful}</div><div class="label">Successful</div></div>
   <div class="card"><div class="value">{total_failed}</div><div class="label">Failed</div></div>
+  <div class="card"><div class="value">{overall_precision:.4f}</div><div class="label">Overall Table Precision</div></div>
+  <div class="card"><div class="value">{overall_recall:.4f}</div><div class="label">Overall Table Recall</div></div>
   <div class="card"><div class="value">{overall_f1:.4f}</div><div class="label">Overall Table F1</div></div>
-  <div class="card"><div class="value">{overall_hit1:.2%}</div><div class="label">Overall Hit@1</div></div>
+  <div class="card"><div class="value">{overall_precision_at_3:.4f}</div><div class="label">Table Precision@3</div></div>
+  <div class="card"><div class="value">{overall_recall_at_3:.4f}</div><div class="label">Table Recall@3</div></div>
+  <div class="card"><div class="value">{overall_f1_at_3:.4f}</div><div class="label">Table F1@3</div></div>
+  <div class="card"><div class="value">{overall_precision_at_5:.4f}</div><div class="label">Table Precision@5</div></div>
+  <div class="card"><div class="value">{overall_recall_at_5:.4f}</div><div class="label">Table Recall@5</div></div>
+  <div class="card"><div class="value">{overall_f1_at_5:.4f}</div><div class="label">Table F1@5</div></div>
+  <div class="card"><div class="value">{overall_precision_at_k:.4f}</div><div class="label">Table Precision@k</div></div>
+  <div class="card"><div class="value">{overall_recall_at_k:.4f}</div><div class="label">Table Recall@k</div></div>
+  <div class="card"><div class="value">{overall_f1_at_k:.4f}</div><div class="label">Table F1@k</div></div>
+  <div class="card"><div class="value">{overall_hit1:.2%}</div><div class="label">Table Hit@1</div></div>
+  <div class="card"><div class="value">{overall_hit3:.2%}</div><div class="label">Table Hit@3</div></div>
+  <div class="card"><div class="value">{overall_hit5:.2%}</div><div class="label">Table Hit@5</div></div>
+  <div class="card"><div class="value">{overall_column_precision:.4f}</div><div class="label">Overall Column Precision</div></div>
+  <div class="card"><div class="value">{overall_column_recall:.4f}</div><div class="label">Overall Column Recall</div></div>
+  <div class="card"><div class="value">{overall_column_f1:.4f}</div><div class="label">Overall Column F1</div></div>
+  <div class="card"><div class="value">{overall_column_precision_at_3:.4f}</div><div class="label">Column Precision@3</div></div>
+  <div class="card"><div class="value">{overall_column_recall_at_3:.4f}</div><div class="label">Column Recall@3</div></div>
+  <div class="card"><div class="value">{overall_column_f1_at_3:.4f}</div><div class="label">Column F1@3</div></div>
+  <div class="card"><div class="value">{overall_column_precision_at_5:.4f}</div><div class="label">Column Precision@5</div></div>
+  <div class="card"><div class="value">{overall_column_recall_at_5:.4f}</div><div class="label">Column Recall@5</div></div>
+  <div class="card"><div class="value">{overall_column_f1_at_5:.4f}</div><div class="label">Column F1@5</div></div>
+  <div class="card"><div class="value">{overall_column_precision_at_k:.4f}</div><div class="label">Column Precision@k</div></div>
+  <div class="card"><div class="value">{overall_column_recall_at_k:.4f}</div><div class="label">Column Recall@k</div></div>
+  <div class="card"><div class="value">{overall_column_f1_at_k:.4f}</div><div class="label">Column F1@k</div></div>
 </div>
 
 <!-- Tabs -->
@@ -2643,7 +2759,7 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                     k=cfg.k,
                     n=cfg.n,
                     cols_per_obj=cfg.cols_per_obj,
-                    score_threshold=cfg.unified_score_threshold,
+                    score_threshold=cfg.score_threshold,
                     search_type=cfg.search_type,
                     search_scorer=cfg.search_scorer,
                     search_fusion=cfg.search_fusion,
@@ -2667,7 +2783,7 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                     m=cfg.m,
                     alpha=cfg.alpha,
                     parallel_alpha=cfg.parallel_alpha,
-                    unified_score_threshold=cfg.unified_score_threshold,
+                    score_threshold=cfg.score_threshold,
                     search_type=cfg.search_type,
                     search_scorer=cfg.search_scorer,
                     search_fusion=cfg.search_fusion,
@@ -2695,7 +2811,6 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
 
                 # Basic results
                 result.discovered_tables = metrics['discovered_tables']
-                result.discovered_columns = metrics['discovered_columns']
 
                 # Basic metrics (Precision, Recall, F1)
                 result.table_precision = metrics['table_precision']
@@ -2869,7 +2984,7 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
 
     if args.discover_config_json:
         raw = json.loads(args.discover_config_json)
-        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha', 'unified_score_threshold',
+        for key in ['k', 'k0', 'n', 'm', 'cols_per_obj', 'alpha', 'parallel_alpha', 'score_threshold',
                     'search_type', 'search_scorer', 'search_fusion', 'vector_search_mode', 'vector_aggregator',
                     'vector_score_weight', 'vector_rank_penalty', 'text_contains', 'text_score_weight', 'text_rank_penalty']:
             if key in raw:
@@ -2881,16 +2996,14 @@ def build_discovery_config(args: argparse.Namespace) -> DiscoveryConfig:
         cfg.k0 = args.discover_k0
     if args.discover_n is not None:
         cfg.n = args.discover_n
-    if args.discover_m is not None:
-        cfg.m = args.discover_m
     if args.discover_cols_per_obj is not None:
         cfg.cols_per_obj = args.discover_cols_per_obj
     if args.discover_alpha is not None:
         cfg.alpha = args.discover_alpha
     if args.discover_parallel_alpha is not None:
         cfg.parallel_alpha = args.discover_parallel_alpha
-    if args.discover_unified_score_threshold is not None:
-        cfg.unified_score_threshold = args.discover_unified_score_threshold
+    if args.discover_score_threshold is not None:
+        cfg.score_threshold = args.discover_score_threshold
 
     cfg.search_type = args.search_type
     if args.discover_search_scorer is not None:
@@ -3031,7 +3144,7 @@ def main():
     discover_group.add_argument('--discover-cols-per-obj', type=int, default=None, help='Columns attached per object')
     discover_group.add_argument('--discover-alpha', type=float, default=None, help='Sequential score blend alpha')
     discover_group.add_argument('--discover-parallel-alpha', type=float, default=None, help='Parallel score blend alpha')
-    discover_group.add_argument('--discover-unified-score-threshold', type=float, default=None, help='Unified mode score threshold [0,1]')
+    discover_group.add_argument('--discover-score-threshold', type=float, default=None, help='Unified mode score threshold [0,100]')
     discover_group.add_argument('--discover-search-scorer', type=str, default=None, help='Hybrid search_scorer (e.g. RSF, RRF, WRRF)')
     discover_group.add_argument('--discover-search-fusion', type=str, default=None, help='Hybrid search_fusion (e.g. UNION, INTERSECT, RERANK)')
     discover_group.add_argument('--discover-vector-search-mode', type=str, default=None, help='Hybrid vector.search_mode (DOCUMENT or CHUNK)')
@@ -3169,7 +3282,7 @@ def main():
             'discover_cols_per_obj': discover_cfg.cols_per_obj,
             'discover_alpha': discover_cfg.alpha,
             'discover_parallel_alpha': discover_cfg.parallel_alpha,
-            'discover_unified_score_threshold': discover_cfg.unified_score_threshold,
+            'discover_score_threshold': discover_cfg.score_threshold,
             'index_setup_time_ms': f'{total_index_setup_time_ms:.2f}',
             'single_user_mode': args.single_user_mode,
             'single_user_name': args.single_user_name if args.single_user_mode else 'n/a',
