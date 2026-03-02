@@ -60,11 +60,12 @@ except ImportError:
 # Configuration
 # ============================================================================
 
-ORACLE_DDL_DIR = "oracle_ddl"
-DEV_METADATA_FILE = "dev_with_metadata.json"
-INDEX_CREATION_SCRIPT = "index_creation.sql"
-OUTPUT_CSV = "hybrid_search_evaluation_results.csv"
-SUMMARY_CSV = "hybrid_search_evaluation_summary.csv"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ORACLE_DDL_DIR = str(PROJECT_ROOT / "data" / "oracle_ddl")
+DEV_METADATA_FILE = str(PROJECT_ROOT / "data" / "questions" / "dev_with_metadata.json")
+INDEX_CREATION_SCRIPT = str(PROJECT_ROOT / "sql" / "index_creation.sql")
+OUTPUT_CSV = str(PROJECT_ROOT / "hybrid_search_evaluation_results.csv")
+SUMMARY_CSV = str(PROJECT_ROOT / "hybrid_search_evaluation_summary.csv")
 
 # Default privileges for created users
 USER_GRANTS = [
