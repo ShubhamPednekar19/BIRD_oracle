@@ -9,7 +9,7 @@ The evaluation pipeline:
 1. **Creates Oracle users** for each database schema (user name = folder name)
 2. **Executes DDL scripts** to create tables and metadata
 3. **Sets up hybrid vector search** using the `developer` package
-4. **Runs natural language queries** from `dev_with_metadata.json`
+4. **Runs natural language queries** from `data/questions/dev_with_metadata.json`
 5. **Compares discovered objects** with expected tables/columns
 6. **Generates metrics** and exports to CSV or browser dashboard, plus an HTML report file
 7. **Cleans up** by dropping users after processing
@@ -41,23 +41,23 @@ pip install -r requirements.txt
 
 | File | Description |
 |------|-------------|
-| `oracle_ddl/` | Directory containing database DDL folders |
-| `dev_with_metadata.json` | BIRD benchmark questions with expected tables/columns |
-| `index_creation.sql` | PL/SQL package for hybrid search (to be provided) |
+| `data/oracle_ddl/` | Directory containing database DDL folders |
+| `data/questions/dev_with_metadata.json` | BIRD benchmark questions with expected tables/columns |
+| `sql/index_creation.sql` | PL/SQL package for hybrid search (to be provided) |
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1"
 ```
 
 ### Test Mode (Quick Pipeline Verification)
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --test
 ```
@@ -72,7 +72,7 @@ Test mode automatically:
 Use a shared Oracle user for all selected schemas:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --single-user-mode
 ```
@@ -80,7 +80,7 @@ python run_hybrid_search_evaluation.py \
 Use a custom shared username (password is the same as username):
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --single-user-mode \
   --single-user-name BIRD_ALL
@@ -89,7 +89,7 @@ python run_hybrid_search_evaluation.py \
 ### Custom Limits
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --max-databases 3 \
   --max-questions 10
@@ -98,7 +98,7 @@ python run_hybrid_search_evaluation.py \
 ### Specific Databases
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --databases california_schools financial
 ```
@@ -111,17 +111,17 @@ python run_hybrid_search_evaluation.py \
 To run all requested combinations (mode/search-type/scorer/dataset-form) with separate output folders, use:
 
 ```bash
-python run_experiment_matrix.py --config experiment_matrix.yaml
+python scripts/run_experiment_matrix.py --config config/experiment_matrix.yaml
 ```
 
 Dry run (print commands only):
 
 ```bash
-python run_experiment_matrix.py --config experiment_matrix.yaml --dry-run
+python scripts/run_experiment_matrix.py --config config/experiment_matrix.yaml --dry-run
 ```
 
 Config tips for beginners:
-- `experiment_matrix.yaml` supports **comment-only** lines that start with `#`.
+- `config/experiment_matrix.yaml` supports **comment-only** lines that start with `#`.
 - To run multiple values for a field, put them in a list. Example:
   - `"modes": ["unified", "parallel"]`
   - `"search_types": ["vector", "hybrid"]`
@@ -163,14 +163,14 @@ Each leaf directory contains:
 An HTML report is now always generated. By default it is saved as `report.html`:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1"
 ```
 
 Use `--html` to customize the file name/path:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --html my_custom_report.html
 ```
@@ -178,7 +178,7 @@ python run_hybrid_search_evaluation.py \
 Use `--output-source` to choose between CSV output and browser mode:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --output-source browser
 ```
@@ -188,7 +188,7 @@ python run_hybrid_search_evaluation.py \
 Generate the HTML report and immediately start a local HTTP server to view it in a browser:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --html report.html \
   --serve
@@ -197,7 +197,7 @@ python run_hybrid_search_evaluation.py \
 This will save the HTML file and then start a server at `http://localhost:8000/`. Use `--port` to change the port:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --html report.html \
   --serve --port 9090
@@ -220,9 +220,9 @@ Then open `http://localhost:8000/report.html` in your browser.
 | Argument | Short | Default | Description |
 |----------|-------|---------|-------------|
 | `--connection-string` | `-c` | *required* | Oracle connection string |
-| `--ddl-dir` | `-d` | `oracle_ddl` | Directory containing DDL folders |
-| `--metadata-file` | `-m` | `dev_with_metadata.json` | Questions metadata file |
-| `--index-script` | `-i` | `index_creation.sql` | Hybrid search package script |
+| `--ddl-dir` | `-d` | `data/oracle_ddl` | Directory containing DDL folders |
+| `--metadata-file` | `-m` | `data/questions/dev_with_metadata.json` | Questions metadata file |
+| `--index-script` | `-i` | `sql/index_creation.sql` | Hybrid search package script |
 | `--output` | `-o` | `hybrid_search_evaluation_results.csv` | Results CSV file |
 | `--summary` | `-s` | `hybrid_search_evaluation_summary.csv` | Summary CSV file |
 | `--databases` | `-db` | all | Specific databases to process |
@@ -423,7 +423,7 @@ A column is only considered "correct" if its parent table was also discovered. T
 
 ## Developer Package Interface
 
-The script expects an `index_creation.sql` file that creates a `developer` package with these procedures:
+The script expects an `sql/index_creation.sql` file that creates a `developer` package with these procedures:
 
 ### `developer.refresh_data`
 
@@ -508,7 +508,7 @@ DROP USER california_schools CASCADE;
 
 ```
 BIRD_oracle/
-├── oracle_ddl/
+├── data/oracle_ddl/
 │   ├── california_schools/
 │   │   ├── california_schools_oracle.sql    # Table DDL
 │   │   └── california_schools_metadata.sql  # Comments/annotations
@@ -516,11 +516,11 @@ BIRD_oracle/
 │   │   ├── financial_oracle.sql
 │   │   └── financial_metadata.sql
 │   └── ...
-├── dev_with_metadata.json      # Questions with expected tables/columns
-├── index_creation.sql          # Developer package (hybrid search)
-├── run_hybrid_search_evaluation.py  # Main evaluation script
+├── data/questions/dev_with_metadata.json      # Questions with expected tables/columns
+├── sql/index_creation.sql          # Developer package (hybrid search)
+├── scripts/run_hybrid_search_evaluation.py  # Main evaluation script
 ├── requirements.txt            # Python dependencies
-└── HYBRID_SEARCH_EVALUATION.md # This documentation
+└── docs/HYBRID_SEARCH_EVALUATION.md # This documentation
 ```
 
 ## Example Output
@@ -537,7 +537,7 @@ RUNNING IN TEST MODE
   Summary file: test_hybrid_search_evaluation_summary.csv
 ============================================================
 
-Loading metadata from: dev_with_metadata.json
+Loading metadata from: data/questions/dev_with_metadata.json
 Found questions for 11 databases
 Will process 2 databases: california_schools, card_games
 
@@ -591,7 +591,7 @@ Overall Hit@1 rate: 55.00%
    - Place `MiniLM.onnx` in the directory
 
 4. **No questions found for database**
-   - Verify `db_id` in `dev_with_metadata.json` matches folder names
+   - Verify `db_id` in `data/questions/dev_with_metadata.json` matches folder names
    - Check folder names are lowercase
 
 ## License

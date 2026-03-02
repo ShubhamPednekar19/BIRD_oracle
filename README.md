@@ -28,25 +28,25 @@ cd ..
 ### 2. Convert SQLite Schemas to Oracle DDL
 
 ```bash
-python3 convert_sqlite_to_oracle.py \
+python3 scripts/convert_sqlite_to_oracle.py \
     -i dev_20240627/dev_databases \
-    -o oracle_ddl \
+    -o data/oracle_ddl \
     -v
 ```
 
 ### 3. Generate Column Metadata (Comments & Annotations)
 
 ```bash
-python3 generate_oracle_metadata.py \
+python3 scripts/generate_oracle_metadata.py \
     -i dev_20240627/dev_databases \
-    -o oracle_ddl \
+    -o data/oracle_ddl \
     -v
 ```
 
 ## Output Structure
 
 ```
-oracle_ddl/
+data/oracle_ddl/
 ├── california_schools/
 │   ├── california_schools_oracle.sql    # Table DDL
 │   └── california_schools_metadata.sql  # Comments & Annotations
@@ -125,12 +125,12 @@ ALTER TABLE table_name MODIFY (column_name ANNOTATIONS (ADD value_description 'V
 
 1. First, run the DDL file to create tables:
 ```sql
-@oracle_ddl/financial/financial_oracle.sql
+@data/oracle_ddl/financial/financial_oracle.sql
 ```
 
 2. Then, add metadata (comments and annotations):
 ```sql
-@oracle_ddl/financial/financial_metadata.sql
+@data/oracle_ddl/financial/financial_metadata.sql
 ```
 
 ### Verifying Comments
@@ -148,11 +148,11 @@ WHERE table_name = 'ACCOUNT';
 Converts SQLite CREATE TABLE statements to Oracle DDL format.
 
 ```
-Usage: python3 convert_sqlite_to_oracle.py [OPTIONS]
+Usage: python3 scripts/convert_sqlite_to_oracle.py [OPTIONS]
 
 Options:
   -i, --input-dir   Input directory with SQLite databases (default: dev_20240627/dev_databases)
-  -o, --output-dir  Output directory for Oracle DDL files (default: oracle_ddl)
+  -o, --output-dir  Output directory for Oracle DDL files (default: data/oracle_ddl)
   -v, --verbose     Print verbose output
 ```
 
@@ -161,20 +161,20 @@ Options:
 Generates Oracle COMMENT and ANNOTATION statements from CSV metadata files.
 
 ```
-Usage: python3 generate_oracle_metadata.py [OPTIONS]
+Usage: python3 scripts/generate_oracle_metadata.py [OPTIONS]
 
 Options:
   -i, --input-dir   Input directory with database folders (default: dev_20240627/dev_databases)
-  -o, --output-dir  Output directory for metadata SQL files (default: oracle_ddl)
+  -o, --output-dir  Output directory for metadata SQL files (default: data/oracle_ddl)
   -v, --verbose     Print verbose output
 ```
 
 ### add_dev_questions_metadata.py
 
-Adds per-question table/column metadata and Oracle SQL rewrites for BIRD `dev.json` style files.
+Adds per-question table/column metadata and Oracle SQL rewrites for BIRD `data/questions/dev.json` style files.
 
 ```bash
-python add_dev_questions_metadata.py <input_dev.json> [output_dev.json] [--method rule_based|llm]
+python scripts/add_dev_questions_metadata.py <input_dev.json> [output_dev.json] [--method rule_based|llm]
 ```
 
 Key options:
@@ -203,8 +203,8 @@ You can also pass the key directly with `--llm-api-key`.
 ### 2) Run metadata generation with OpenRouter
 
 ```bash
-python add_dev_questions_metadata.py \
-  dev_original.json dev_with_metadata.json \
+python scripts/add_dev_questions_metadata.py \
+  data/questions/dev_original.json data/questions/dev_with_metadata.json \
   --method llm \
   --llm-provider openrouter \
   --llm-model openai/gpt-4o-mini \
@@ -234,8 +234,8 @@ You can also pass the key directly with `--llm-api-key`.
 ### 2) Run metadata generation with Groq (batched)
 
 ```bash
-python add_dev_questions_metadata.py \
-  dev_original.json dev_with_metadata.json \
+python scripts/add_dev_questions_metadata.py \
+  data/questions/dev_original.json data/questions/dev_with_metadata.json \
   --method llm \
   --llm-provider groq \
   --llm-model qwen/qwen3-coder:free \
@@ -276,8 +276,8 @@ ollama pull mistral:7b
 ### 3) Run metadata generation with Ollama
 
 ```bash
-python add_dev_questions_metadata.py \
-  dev_original.json dev_with_metadata.json \
+python scripts/add_dev_questions_metadata.py \
+  data/questions/dev_original.json data/questions/dev_with_metadata.json \
   --method llm \
   --llm-provider ollama \
   --llm-model qwen2.5:3b \
@@ -303,7 +303,7 @@ Optional dependencies:
 
 ## Hybrid Search Evaluation
 
-Use `run_hybrid_search_evaluation.py` for Oracle metadata discovery benchmarking with sequential, parallel, or unified modes.
+Use `scripts/run_hybrid_search_evaluation.py` for Oracle metadata discovery benchmarking with sequential, parallel, or unified modes.
 
 The runner now supports two request styles:
 
@@ -318,7 +318,7 @@ falls back to built-in regex/stopword filtering when NLTK resources are unavaila
 Example with parallel mode and grouped discovery config:
 
 ```bash
-python run_hybrid_search_evaluation.py \
+python scripts/run_hybrid_search_evaluation.py \
   --connection-string "sys/password@localhost:1521/FREEPDB1" \
   --mode parallel \
   --search-type hybrid \

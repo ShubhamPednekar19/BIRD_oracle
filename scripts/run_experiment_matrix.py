@@ -140,7 +140,7 @@ def _build_command(
 
     cmd = [
         "python",
-        "run_hybrid_search_evaluation.py",
+        "scripts/run_hybrid_search_evaluation.py",
         "--connection-string",
         str(config["connection_string"]),
         "--mode",
@@ -183,7 +183,7 @@ def _build_command(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run experiment matrix from YAML config")
-    parser.add_argument("--config", default="experiment_matrix.yaml", help="Path to YAML config")
+    parser.add_argument("--config", default="config/experiment_matrix.yaml", help="Path to YAML config")
     parser.add_argument("--dry-run", action="store_true", help="Only print commands without executing")
     args = parser.parse_args()
 
