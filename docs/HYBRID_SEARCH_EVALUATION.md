@@ -220,17 +220,19 @@ Then open `http://localhost:8000/report.html` in your browser.
 | Argument | Short | Default | Description |
 |----------|-------|---------|-------------|
 | `--connection-string` | `-c` | *required* | Oracle connection string |
-| `--ddl-dir` | `-d` | `data/oracle_ddl` | Directory containing DDL folders |
-| `--metadata-file` | `-m` | `data/questions/dev_with_metadata.json` | Questions metadata file |
+| `--ddl-dir` | `-d` | `data/oracle_BIRD_train` | Directory containing DDL folders |
+| `--metadata-file` | `-m` | `data/BIRD_questions/train_nl2sql.json` | Questions metadata file |
 | `--index-script` | `-i` | `sql/index_creation.sql` | Hybrid search package script |
-| `--output` | `-o` | `hybrid_search_evaluation_results.csv` | Results CSV file |
-| `--summary` | `-s` | `hybrid_search_evaluation_summary.csv` | Summary CSV file |
+| `--output` | `-o` | auto (`results/csv/...`) | Results CSV file |
+| `--summary` | `-s` | auto (`results/summary/...`) | Summary CSV file |
 | `--databases` | `-db` | all | Specific databases to process |
 | `--test` | `-t` | false | Run in test mode |
 | `--max-questions` | `-q` | all | Max questions per database |
 | `--max-databases` | `-n` | all | Max databases to process |
 | `--output-source` | `-f` | `csv` | Primary output source: `csv` or `browser` |
-| `--html` | | `report.html` | Output HTML report file path |
+| `--html` | | auto (`results/html/...`) | Output HTML report file path |
+| `--results-root` | | `results` | Root folder for auto-routed outputs |
+| `--log-file` | | auto (`results/logs/run_*.log`) | Log file path for live run output |
 | `--serve` | | false | Start a local HTTP server to view the HTML report |
 | `--port` | | 8000 | Port for the local HTTP server |
 | `--single-user-mode` | | false | Load all selected schemas into one Oracle user and run all queries there |
@@ -303,6 +305,16 @@ Per-query detailed results:
 | `table_recall_at_3` | Fraction of expected tables in top-3 |
 | `table_recall_at_5` | Fraction of expected tables in top-5 |
 | `table_recall_at_10` | Fraction of expected tables in top-10 |
+| **Table Precision@K (Fraction)** | Of top-K returned tables, how many were expected |
+| `table_precision_at_1` | Precision among top-1 table |
+| `table_precision_at_3` | Precision among top-3 tables |
+| `table_precision_at_5` | Precision among top-5 tables |
+| `table_precision_at_k` | Precision among top-K tables (`K = --discover-k`) |
+| **Column Recall@K (Fraction)** | Fraction of expected columns recovered in top-K context |
+| `column_recall_at_1` | Column recall at top-1 context |
+| `column_recall_at_3` | Column recall at top-3 context |
+| `column_recall_at_5` | Column recall at top-5 context |
+| `column_recall_at_k` | Column recall at top-K context (`K = --discover-k`) |
 | **Advanced Metrics** | |
 | `table_mrr` | Mean Reciprocal Rank for tables |
 | `table_jaccard` | Jaccard similarity for tables |
@@ -339,6 +351,16 @@ Per-database aggregated metrics:
 | `avg_table_recall_at_3` | Average Recall@3 for tables |
 | `avg_table_recall_at_5` | Average Recall@5 for tables |
 | `avg_table_recall_at_10` | Average Recall@10 for tables |
+| **Table Precision@K Averages** | |
+| `avg_table_precision_at_1` | Average Table Precision@1 |
+| `avg_table_precision_at_3` | Average Table Precision@3 |
+| `avg_table_precision_at_5` | Average Table Precision@5 |
+| `avg_table_precision_at_k` | Average Table Precision@K |
+| **Column Recall@K Averages** | |
+| `avg_column_recall_at_1` | Average Column Recall@1 |
+| `avg_column_recall_at_3` | Average Column Recall@3 |
+| `avg_column_recall_at_5` | Average Column Recall@5 |
+| `avg_column_recall_at_k` | Average Column Recall@K |
 | **Advanced Metrics** | |
 | `avg_table_mrr` | Average MRR for tables |
 | `avg_table_jaccard` | Average Jaccard similarity |
@@ -350,7 +372,7 @@ Per-database aggregated metrics:
 
 ### HTML Report
 
-A single HTML file is always generated (default: `report.html`) that contains the same styled and interactive dashboard used by browser mode. The file can be opened directly in any browser or served via a local HTTP server using `--serve`. Use `--html <file>` to change the file name/path.
+A single HTML file is always generated (auto-routed under `results/html/` unless `--html` is provided) that contains the same styled and interactive dashboard used by browser mode. The file can be opened directly in any browser or served via a local HTTP server using `--serve`. Use `--html <file>` to force a custom file name/path.
 
 The **Run Parameters** section in the HTML report includes `index_setup_time_ms`, which is the total time spent running index/package setup for the run (in single-user mode this is the one-time shared setup time).
 

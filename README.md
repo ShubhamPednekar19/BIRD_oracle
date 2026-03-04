@@ -180,13 +180,27 @@ python scripts/add_dev_questions_metadata.py <input_dev.json> [output_dev.json] 
 Key options:
 
 - `--method`: `rule_based` (default) or `llm`
-- `--llm-provider`: `openai_compat` (default), `openrouter`, `groq`, or `ollama`
+- `--llm-provider`: `openai_compat` (default), `openrouter`, `groq`, `ollama`, or `oci`
 - `--llm-model`: model name (e.g., `gpt-4o-mini`, `qwen2.5:3b`)
 - `--llm-base-url`: custom API base URL
 - `--llm-api-key`: API key for `openai_compat` provider
 - `--llm-site-url`: optional OpenRouter `HTTP-Referer` header value
 - `--llm-app-name`: optional OpenRouter `X-Title` header value
-- `--llm-batch-size`: questions per LLM request for OpenAI-compatible providers (default `35`)
+- `--llm-batch-size`: questions per LLM request for OpenAI-compatible providers (default `1`)
+- `--output-format`: `json` (default) or `jsonl`
+- `--test-mode` / `--test-limit`: run on only the first N questions
+- `--test-llm` / `--test-sql`: smoke test one SQL prompt and exit
+
+OCI-only options (`--llm-provider oci`):
+
+- `--oci-compartment-id`
+- `--oci-model-id`
+- `--oci-endpoint`
+- `--oci-config-profile` (default `DEFAULT`)
+- `--oci-config-file` (default `~/.oci/config`)
+- `--oci-temperature` (default `0.0`)
+- `--oci-max-tokens` (default `600`)
+- `--oci-top-p` (default `0.75`)
 
 ## Using OpenRouter
 
@@ -247,7 +261,7 @@ Notes:
 - Default Groq-compatible base URL is `https://api.groq.com/openai/v1`.
 - Groq provider uses the Groq Python SDK (`Groq(...).chat.completions.create(...)`) with batched prompts.
 - You can change endpoint with `--llm-base-url` if needed.
-- For OpenAI-compatible providers (`openai_compat`, `openrouter`, `groq`), questions are sent in batches (default 35 per request) instead of one-by-one.
+- For OpenAI-compatible providers (`openai_compat`, `openrouter`, `groq`), questions are sent in batches (default 1 per request) instead of one-by-one.
 
 ## Using Ollama with Local Open-Source Models
 
@@ -289,6 +303,20 @@ Notes:
 - If Ollama is not reachable or the model output is invalid, the script automatically falls back to `rule_based` extraction and continues.
 - For higher accuracy on complex SQL, try a larger model (e.g., 7B/8B+).
 - No OpenAI API key is needed when using `--llm-provider ollama`.
+
+## Using OCI Generative AI
+
+Use `--method llm --llm-provider oci` to run extraction through OCI Generative AI Inference.
+
+```bash
+python scripts/add_dev_questions_metadata.py \
+  data/questions/dev_original.json data/questions/dev_with_metadata.json \
+  --method llm \
+  --llm-provider oci \
+  --oci-compartment-id "ocid1.compartment.oc1..example" \
+  --oci-model-id "ocid1.generativeaimodel.oc1..example" \
+  --oci-endpoint "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+```
 
 ## Requirements
 
@@ -338,4 +366,13 @@ Optional hybrid tuning flags:
 - `--discover-text-score-weight`
 - `--discover-text-rank-penalty`
 
-The generated HTML/CSV reports include additional @K metrics (Recall, Precision, F1) for both table and column evaluation.
+Output paths are now auto-routed under `results/` by default:
+
+- CSV details: `results/csv/...`
+- Summary CSV: `results/summary/...`
+- HTML report: `results/html/...`
+- Live logs: `results/logs/run_YYYYMMDD_HHMMSS.log`
+
+You can override the root with `--results-root`, and still pass explicit file paths via `--output`, `--summary`, `--html`, and `--log-file`.
+
+The generated HTML/CSV reports include additional @K metrics, including Table Precision@K and Column Recall@K variants.
