@@ -25,6 +25,7 @@ Requirements:
 import argparse
 import csv
 import html as html_module
+import hashlib
 import json
 import os
 import re
@@ -61,8 +62,8 @@ except ImportError:
 # ============================================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ORACLE_DDL_DIR = str(PROJECT_ROOT / "data" / "oracle_ddl")
-DEV_METADATA_FILE = str(PROJECT_ROOT / "data" / "questions" / "dev_with_metadata.json")
+ORACLE_DDL_DIR = str(PROJECT_ROOT / "data" / "oracle_BIRD_train")
+DEV_METADATA_FILE = str(PROJECT_ROOT / "data" / "BIRD_questions" / "train_nl2sql.json")
 INDEX_CREATION_SCRIPT = str(PROJECT_ROOT / "sql" / "index_creation.sql")
 OUTPUT_CSV = str(PROJECT_ROOT / "hybrid_search_evaluation_results.csv")
 SUMMARY_CSV = str(PROJECT_ROOT / "hybrid_search_evaluation_summary.csv")
@@ -83,6 +84,120 @@ ADDITIONAL_GRANTS = [
     "READ, WRITE ON DIRECTORY ONNX_IMPORT",
     "CREATE MINING MODEL",
 ]
+
+UNIFIED_TABLE_NAME_MAX_LEN = 100
+UNIFIED_TABLE_HASH_LEN = 6
+
+
+class _Tee:
+    """Duplicate writes to multiple file-like objects."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+def _needs_quoting(identifier: str) -> bool:
+    """Return True if identifier must be quoted for Oracle."""
+    if len(identifier) > 30:
+        return True
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', identifier):
+        return True
+    return False
+
+
+def _quote_identifier(identifier: str, force: bool = False) -> str:
+    """Quote Oracle identifier if needed (or forced), escaping internal quotes."""
+    if force or _needs_quoting(identifier):
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
+    return identifier
+
+
+def make_prefixed_table_name(db_id: str, table_name: str) -> str:
+    """
+    Build unified table name as {db}_{table} with deterministic truncation.
+
+    If the name exceeds UNIFIED_TABLE_NAME_MAX_LEN, truncate and append a short hash.
+    """
+    base = f"{db_id}_{table_name}"
+    if len(base) <= UNIFIED_TABLE_NAME_MAX_LEN:
+        return base
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:UNIFIED_TABLE_HASH_LEN]
+    suffix = f"_{digest}"
+    keep = UNIFIED_TABLE_NAME_MAX_LEN - len(suffix)
+    return f"{base[:keep]}{suffix}"
+
+
+def _extract_table_names_from_ddl(ddl_path: str) -> List[Tuple[str, bool]]:
+    """Extract table names from CREATE TABLE statements in a DDL file.
+
+    Returns list of (table_name, was_quoted).
+    """
+    try:
+        with open(ddl_path, "r", encoding="utf-8") as f:
+            sql_content = f.read()
+    except Exception as e:
+        print(f"  Warning: failed to read DDL for table extraction: {ddl_path}: {e}")
+        return []
+
+    statements: List[str] = []
+    buf: List[str] = []
+    in_plsql = False
+
+    def flush():
+        nonlocal buf
+        text = "\n".join(buf).strip()
+        buf = []
+        if text:
+            if not in_plsql and text.endswith(";"):
+                text = text[:-1].rstrip()
+            statements.append(text)
+
+    for raw_line in sql_content.splitlines():
+        line = raw_line.rstrip("\n")
+        stripped = line.strip()
+        upper = stripped.upper()
+
+        if upper.startswith("CREATE OR REPLACE") or upper == "BEGIN" or upper.startswith("DECLARE"):
+            in_plsql = True
+
+        if in_plsql and stripped == "/":
+            flush()
+            in_plsql = False
+            continue
+
+        buf.append(line)
+        if (not in_plsql) and stripped.endswith(";"):
+            flush()
+
+    if buf:
+        in_plsql = False
+        flush()
+
+    table_names: List[Tuple[str, bool]] = []
+    for stmt in statements:
+        s = stmt.strip()
+        if not s:
+            continue
+        if not re.match(r'^\s*CREATE\s+TABLE\s+', s, re.IGNORECASE):
+            continue
+        match = re.match(r'^\s*CREATE\s+TABLE\s+("([^"]+)"|([A-Za-z0-9_]+))',
+                         s, re.IGNORECASE)
+        if not match:
+            continue
+        if match.group(2) is not None:
+            table_names.append((match.group(2), True))
+        else:
+            table_names.append((match.group(3), False))
+
+    return table_names
 
 
 # ============================================================================
@@ -169,6 +284,7 @@ class EvaluationResult:
     table_recall_at_3: float = 0.0   # Fraction of expected tables in top-3
     table_recall_at_5: float = 0.0   # Fraction of expected tables in top-5
     table_recall_at_10: float = 0.0  # Fraction of expected tables in top-10
+    table_recall_at_15: float = 0.0  # Fraction of expected tables in top-15
     table_recall_at_k: float = 0.0
     column_recall_at_3: float = 0.0
     column_recall_at_5: float = 0.0
@@ -232,6 +348,7 @@ class DatabaseSummary:
     avg_table_recall_at_3: float = 0.0
     avg_table_recall_at_5: float = 0.0
     avg_table_recall_at_10: float = 0.0
+    avg_table_recall_at_15: float = 0.0
     avg_table_recall_at_k: float = 0.0
     avg_column_recall_at_3: float = 0.0
     avg_column_recall_at_5: float = 0.0
@@ -1016,6 +1133,33 @@ class OracleManager:
         if self.sys_connection:
             self.sys_connection.close()
 
+    def rename_table(self, old_name: str, new_name: str, old_was_quoted: bool = False,
+                     new_force_quote: bool = False) -> bool:
+        """Rename a table within the current schema."""
+        if not self.user_connection:
+            print("Error: Not connected as user")
+            return False
+
+        old_q = _quote_identifier(old_name, force=old_was_quoted)
+        new_q = _quote_identifier(new_name, force=new_force_quote)
+        sql = f"ALTER TABLE {old_q} RENAME TO {new_q}"
+
+        try:
+            with self.user_connection.cursor() as cursor:
+                cursor.execute(sql)
+            self.user_connection.commit()
+            return True
+        except oracledb.DatabaseError as e:
+            err, = e.args
+            if getattr(err, "code", None) == 942:
+                print(f"  Warning: table not found for rename: {old_name}")
+                return False
+            if getattr(err, "code", None) == 955:
+                print(f"  Warning: target table name exists, skipping: {new_name}")
+                return False
+            print(f"  Error renaming table {old_name} -> {new_name}: {e}")
+            return False
+
     def _strip_leading_comments(self, stmt: str) -> str:
         s = stmt.lstrip()
 
@@ -1358,10 +1502,10 @@ def evaluate_result(expected_tables: List[ExpectedObject],
     # ==========================================================
     # Expected tables & columns
     # ==========================================================
-    expected_table_names = {t.table_name for t in expected_tables}
+    expected_table_names = {t.table_name.lower() for t in expected_tables}
 
     expected_cols_map = {
-        t.table_name: [c.lower() for c in t.columns]
+        t.table_name.lower(): [c.lower() for c in t.columns]
         for t in expected_tables
     }
 
@@ -1379,7 +1523,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
             if c_lower not in seen_cols:
                 seen_cols.add(c_lower)
                 ordered_cols.append(c_lower)
-        discovered_cols_map[d.object_name] = ordered_cols
+        discovered_cols_map[d.object_name.lower()] = ordered_cols
 
     # ==========================================================
     # Table-level metrics
@@ -1418,7 +1562,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
 
         for table in expected_table_names:
             exp_cols = set(expected_cols_map.get(table, []))
-            disc_cols = discovered_cols_map.get(table.upper(), [])[:k]
+            disc_cols = discovered_cols_map.get(table, [])[:k]
 
             p, r, _ = calculate_precision_recall_f1(exp_cols, set(disc_cols))
 
@@ -1450,6 +1594,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
     recall_at_3 = calculate_recall_at_k(expected_table_names, discovered_table_names, 3)
     recall_at_5 = calculate_recall_at_k(expected_table_names, discovered_table_names, 5)
     recall_at_10 = calculate_recall_at_k(expected_table_names, discovered_table_names, 10)
+    recall_at_15 = calculate_recall_at_k(expected_table_names, discovered_table_names, 15)
     recall_at_k = calculate_recall_at_k(expected_table_names, discovered_table_names, eval_k)
 
     table_p_at_1, _, table_f1_at_1 = calculate_precision_recall_f1_at_k(
@@ -1513,6 +1658,7 @@ def evaluate_result(expected_tables: List[ExpectedObject],
         'recall_at_3': recall_at_3,
         'recall_at_5': recall_at_5,
         'recall_at_10': recall_at_10,
+        'recall_at_15': recall_at_15,
         'recall_at_k': recall_at_k,
 
         'table_precision_at_1': table_p_at_1,
@@ -1579,7 +1725,7 @@ def load_dev_metadata(filepath: str) -> Dict[str, List[Dict]]:
     # Group by db_id
     grouped = {}
     for item in data:
-        db_id = item.get('db_id', '')
+        db_id = item.get('db_id', '').lower()
         if db_id not in grouped:
             grouped[db_id] = []
         grouped[db_id].append(item)
@@ -1626,7 +1772,7 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
         'table_hit_at_1', 'table_hit_at_3', 'table_hit_at_5',
         # Recall@k (fraction - better for multi-table)
         'table_recall_at_3', 'table_recall_at_5', 'table_recall_at_10',
-        'table_recall_at_k',
+        'table_recall_at_15', 'table_recall_at_k',
         'column_recall_at_3', 'column_recall_at_5', 'column_recall_at_k',
         'table_precision_at_1', 'table_precision_at_3', 'table_precision_at_5', 'table_precision_at_k',
         'table_f1_at_1', 'table_f1_at_3', 'table_f1_at_5', 'table_f1_at_k',
@@ -1671,6 +1817,7 @@ def write_results_csv(results: List[EvaluationResult], filepath: str):
                 'table_recall_at_3': f"{result.table_recall_at_3:.4f}",
                 'table_recall_at_5': f"{result.table_recall_at_5:.4f}",
                 'table_recall_at_10': f"{result.table_recall_at_10:.4f}",
+                'table_recall_at_15': f"{result.table_recall_at_15:.4f}",
                 'table_recall_at_k': f"{result.table_recall_at_k:.4f}",
                 'column_recall_at_3': f"{result.column_recall_at_3:.4f}",
                 'column_recall_at_5': f"{result.column_recall_at_5:.4f}",
@@ -1720,7 +1867,7 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
         # Hit@k rates (binary)
         'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate',
         # Recall@k averages (fraction - better for multi-table)
-        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10',
+        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10', 'avg_table_recall_at_15',
         'avg_table_recall_at_k',
         'avg_column_recall_at_3', 'avg_column_recall_at_5', 'avg_column_recall_at_k',
         'avg_table_precision_at_1', 'avg_table_precision_at_3', 'avg_table_precision_at_5', 'avg_table_precision_at_k',
@@ -1761,6 +1908,7 @@ def write_summary_csv(summaries: List[DatabaseSummary], filepath: str):
                 'avg_table_recall_at_3': f"{summary.avg_table_recall_at_3:.4f}",
                 'avg_table_recall_at_5': f"{summary.avg_table_recall_at_5:.4f}",
                 'avg_table_recall_at_10': f"{summary.avg_table_recall_at_10:.4f}",
+                'avg_table_recall_at_15': f"{summary.avg_table_recall_at_15:.4f}",
                 'avg_table_recall_at_k': f"{summary.avg_table_recall_at_k:.4f}",
                 'avg_column_recall_at_3': f"{summary.avg_column_recall_at_3:.4f}",
                 'avg_column_recall_at_5': f"{summary.avg_column_recall_at_5:.4f}",
@@ -1828,7 +1976,7 @@ def write_html_report(results: List[EvaluationResult],
         'avg_table_precision', 'avg_table_recall', 'avg_table_f1',
         'avg_column_precision', 'avg_column_recall', 'avg_column_f1',
         'table_hit_at_1_rate', 'table_hit_at_3_rate', 'table_hit_at_5_rate',
-        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10',
+        'avg_table_recall_at_3', 'avg_table_recall_at_5', 'avg_table_recall_at_10', 'avg_table_recall_at_15',
         'avg_table_mrr', 'avg_table_jaccard', 'table_exact_match_rate',
         'avg_joint_column_precision', 'avg_joint_column_recall', 'avg_joint_column_f1',
     ]
@@ -1843,6 +1991,7 @@ def write_html_report(results: List[EvaluationResult],
             f"{s.table_hit_at_1_rate:.4f}", f"{s.table_hit_at_3_rate:.4f}",
             f"{s.table_hit_at_5_rate:.4f}", f"{s.avg_table_recall_at_3:.4f}",
             f"{s.avg_table_recall_at_5:.4f}", f"{s.avg_table_recall_at_10:.4f}",
+            f"{s.avg_table_recall_at_15:.4f}",
             f"{s.avg_table_mrr:.4f}", f"{s.avg_table_jaccard:.4f}",
             f"{s.table_exact_match_rate:.4f}",
             f"{s.avg_joint_column_precision:.4f}",
@@ -1858,6 +2007,9 @@ def write_html_report(results: List[EvaluationResult],
         'table_precision', 'table_recall', 'table_f1',
         'column_precision', 'column_recall', 'column_f1',
         'table_hit_at_1', 'table_hit_at_3', 'table_hit_at_5',
+        'table_recall_at_3', 'table_recall_at_5', 'table_recall_at_10',
+        'table_recall_at_15', 'table_recall_at_k',
+        'column_recall_at_3', 'column_recall_at_5', 'column_recall_at_k',
         'table_mrr', 'table_jaccard', 'table_exact_match',
         'joint_column_precision', 'joint_column_recall', 'joint_column_f1',
         'error',
@@ -1873,7 +2025,11 @@ def write_html_report(results: List[EvaluationResult],
             f"{r.table_f1:.4f}", f"{r.column_precision:.4f}",
             f"{r.column_recall:.4f}", f"{r.column_f1:.4f}",
             str(r.table_hit_at_1), str(r.table_hit_at_3),
-            str(r.table_hit_at_5), f"{r.table_mrr:.4f}",
+            str(r.table_hit_at_5), f"{r.table_recall_at_3:.4f}",
+            f"{r.table_recall_at_5:.4f}", f"{r.table_recall_at_10:.4f}",
+            f"{r.table_recall_at_15:.4f}", f"{r.table_recall_at_k:.4f}",
+            f"{r.column_recall_at_3:.4f}", f"{r.column_recall_at_5:.4f}",
+            f"{r.column_recall_at_k:.4f}", f"{r.table_mrr:.4f}",
             f"{r.table_jaccard:.4f}", str(r.table_exact_match),
             f"{r.joint_column_precision:.4f}",
             f"{r.joint_column_recall:.4f}",
@@ -1959,6 +2115,7 @@ def calculate_summary(db_id: str, results: List[EvaluationResult]) -> DatabaseSu
         summary.avg_table_recall_at_3 = sum(r.table_recall_at_3 for r in successful) / n
         summary.avg_table_recall_at_5 = sum(r.table_recall_at_5 for r in successful) / n
         summary.avg_table_recall_at_10 = sum(r.table_recall_at_10 for r in successful) / n
+        summary.avg_table_recall_at_15 = sum(r.table_recall_at_15 for r in successful) / n
         summary.avg_table_recall_at_k = sum(r.table_recall_at_k for r in successful) / n
         summary.avg_column_recall_at_3 = sum(r.column_recall_at_3 for r in successful) / n
         summary.avg_column_recall_at_5 = sum(r.column_recall_at_5 for r in successful) / n
@@ -2032,6 +2189,8 @@ def generate_results_html(results: List[EvaluationResult],
     overall_f1_at_5 = 0.0
     overall_precision_at_5 = 0.0
     overall_recall_at_5 = 0.0
+    overall_recall_at_10 = 0.0
+    overall_recall_at_15 = 0.0
     overall_column_f1_at_5 = 0.0
     overall_column_precision_at_5 = 0.0
     overall_column_recall_at_5 = 0.0
@@ -2054,6 +2213,8 @@ def generate_results_html(results: List[EvaluationResult],
         overall_f1_at_5 = sum(s.avg_table_f1_at_5 * s.successful_queries for s in summaries) / total_successful
         overall_precision_at_5 = sum(s.avg_table_precision_at_5 * s.successful_queries for s in summaries) / total_successful
         overall_recall_at_5 = sum(s.avg_table_recall_at_5 * s.successful_queries for s in summaries) / total_successful
+        overall_recall_at_10 = sum(s.avg_table_recall_at_10 * s.successful_queries for s in summaries) / total_successful
+        overall_recall_at_15 = sum(s.avg_table_recall_at_15 * s.successful_queries for s in summaries) / total_successful
         overall_f1_at_k = sum(s.avg_table_f1_at_k * s.successful_queries for s in summaries) / total_successful
         overall_precision_at_k = sum(s.avg_table_precision_at_k * s.successful_queries for s in summaries) / total_successful
         overall_recall_at_k = sum(s.avg_table_recall_at_k * s.successful_queries for s in summaries) / total_successful
@@ -2093,6 +2254,8 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{s.avg_column_f1:.4f}</td>"
             f"<td>{s.avg_table_recall_at_3:.4f}</td>"
             f"<td>{s.avg_table_recall_at_5:.4f}</td>"
+            f"<td>{s.avg_table_recall_at_10:.4f}</td>"
+            f"<td>{s.avg_table_recall_at_15:.4f}</td>"
             f"<td>{s.avg_table_recall_at_k:.4f}</td>"
             f"<td>{s.avg_column_recall_at_3:.4f}</td>"
             f"<td>{s.avg_column_recall_at_5:.4f}</td>"
@@ -2160,6 +2323,8 @@ def generate_results_html(results: List[EvaluationResult],
             f"<td>{r.column_f1:.4f}</td>"
             f"<td>{r.table_recall_at_3:.4f}</td>"
             f"<td>{r.table_recall_at_5:.4f}</td>"
+            f"<td>{r.table_recall_at_10:.4f}</td>"
+            f"<td>{r.table_recall_at_15:.4f}</td>"
             f"<td>{r.table_recall_at_k:.4f}</td>"
             f"<td>{r.column_recall_at_3:.4f}</td>"
             f"<td>{r.column_recall_at_5:.4f}</td>"
@@ -2305,6 +2470,8 @@ def generate_results_html(results: List[EvaluationResult],
   <div class="card"><div class="value">{overall_precision_at_5:.4f}</div><div class="label">Table Precision@5</div></div>
   <div class="card"><div class="value">{overall_recall_at_5:.4f}</div><div class="label">Table Recall@5</div></div>
   <div class="card"><div class="value">{overall_f1_at_5:.4f}</div><div class="label">Table F1@5</div></div>
+  <div class="card"><div class="value">{overall_recall_at_10:.4f}</div><div class="label">Table Recall@10</div></div>
+  <div class="card"><div class="value">{overall_recall_at_15:.4f}</div><div class="label">Table Recall@15</div></div>
   <div class="card"><div class="value">{overall_precision_at_k:.4f}</div><div class="label">Table Precision@k</div></div>
   <div class="card"><div class="value">{overall_recall_at_k:.4f}</div><div class="label">Table Recall@k</div></div>
   <div class="card"><div class="value">{overall_f1_at_k:.4f}</div><div class="label">Table F1@k</div></div>
@@ -2628,6 +2795,64 @@ def start_results_server(html_content: str, port: int = 8787):
 
 
 # ============================================================================
+# Unified Single-User Schema Helpers
+# ============================================================================
+
+def rename_tables_for_db(oracle_mgr: OracleManager, db_id: str, ddl_file: str) -> None:
+    """Rename tables for one db to unified {db}_{table} naming."""
+    table_names = _extract_table_names_from_ddl(ddl_file)
+    if not table_names:
+        print(f"  Warning: no tables found in DDL for {db_id}")
+        return
+
+    print(f"  Prefixing tables for {db_id} with '{db_id}_' (max {UNIFIED_TABLE_NAME_MAX_LEN} chars)")
+    sample_old = table_names[0][0]
+    sample_new = make_prefixed_table_name(db_id, sample_old)
+    print(f"  Sample rename: {sample_old} -> {sample_new}")
+
+    for old_name, was_quoted in table_names:
+        new_name = make_prefixed_table_name(db_id, old_name)
+        if old_name == new_name:
+            continue
+        oracle_mgr.rename_table(old_name, new_name, old_was_quoted=was_quoted,
+                                new_force_quote=was_quoted)
+
+
+# ============================================================================
+# Results Path Helpers
+# ============================================================================
+
+def _resolve_results_root(path_value: str) -> Path:
+    root = Path(path_value)
+    if not root.is_absolute():
+        root = PROJECT_ROOT / root
+    return root
+
+
+def _build_results_subdir(results_root: Path, kind: str, mode: str,
+                          search_type: str, scorer: Optional[str],
+                          single_user_mode: bool) -> Path:
+    user_scope = "single-user" if single_user_mode else "multiple-user"
+    if search_type == "vector":
+        return results_root / kind / mode / "vector" / user_scope
+    scorer_dir = (scorer or "RSF").upper()
+    return results_root / kind / mode / "hybrid" / scorer_dir / user_scope
+
+
+def _build_result_filename(ext: str, search_type: str, scorer: Optional[str],
+                           text_weight: float, vector_weight: float,
+                           text_penalty: float, vector_penalty: float) -> str:
+    if search_type == "vector":
+        return f"result.{ext}"
+    scorer_val = (scorer or "RSF").upper()
+    if scorer_val == "RSF":
+        return f"result_{text_weight}_{vector_weight}.{ext}"
+    if scorer_val == "RRF":
+        return f"result_{text_penalty}_{vector_penalty}.{ext}"
+    return f"result.{ext}"
+
+
+# ============================================================================
 # Main Processing
 # ============================================================================
 
@@ -2701,7 +2926,8 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
         db_id,
         questions,
         discovery_mode=discovery_mode,
-        discover_cfg=discover_cfg
+        discover_cfg=discover_cfg,
+        single_user_prefix=False
     )
 
     # Step 7: Drop user
@@ -2713,7 +2939,8 @@ def process_database(oracle_mgr: OracleManager, db_id: str,
 def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                               questions: List[Dict],
                               discovery_mode: str = 'sequential',
-                              discover_cfg: Optional[DiscoveryConfig] = None) -> Tuple[List[EvaluationResult], DatabaseSummary]:
+                              discover_cfg: Optional[DiscoveryConfig] = None,
+                              single_user_prefix: bool = False) -> Tuple[List[EvaluationResult], DatabaseSummary]:
     """Evaluate all questions for one db_id using the current connected user."""
     results = []
 
@@ -2728,6 +2955,9 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
 
         # Get expected objects
         expected_objs = get_expected_objects(question)
+        if single_user_prefix:
+            for obj in expected_objs:
+                obj.table_name = make_prefixed_table_name(db_id, obj.table_name)
         expected_tables = [o.table_name for o in expected_objs]
         expected_columns = []
         for o in expected_objs:
@@ -2830,6 +3060,7 @@ def evaluate_questions_for_db(oracle_mgr: OracleManager, db_id: str,
                 result.table_recall_at_3 = metrics['recall_at_3']
                 result.table_recall_at_5 = metrics['recall_at_5']
                 result.table_recall_at_10 = metrics['recall_at_10']
+                result.table_recall_at_15 = metrics['recall_at_15']
                 result.table_recall_at_k = metrics['recall_at_k']
 
                 result.table_precision_at_1 = metrics['table_precision_at_1']
@@ -2944,6 +3175,8 @@ def process_databases_single_user(
             oracle_mgr.execute_ddl_file(ddl_file)
         if os.path.exists(metadata_file):
             oracle_mgr.execute_ddl_file(metadata_file)
+        if os.path.exists(ddl_file):
+            rename_tables_for_db(oracle_mgr, db_id, ddl_file)
 
     index_setup_start = time.perf_counter()
     package_installed = oracle_mgr.execute_index_creation(index_script)
@@ -2959,6 +3192,7 @@ def process_databases_single_user(
 
     for db_id in db_ids:
         questions = questions_by_db.get(db_id, [])
+        print(db_id)
         if not questions:
             print(f"\nSkipping {db_id}: No questions found")
             continue
@@ -2970,7 +3204,8 @@ def process_databases_single_user(
             db_id,
             questions,
             discovery_mode=discovery_mode,
-            discover_cfg=discover_cfg
+            discover_cfg=discover_cfg,
+            single_user_prefix=True
         )
         all_results.extend(results)
         all_summaries.append(summary)
@@ -3056,13 +3291,13 @@ def main():
     )
     parser.add_argument(
         '--output', '-o',
-        default=OUTPUT_CSV,
-        help=f'Output CSV file (default: {OUTPUT_CSV})'
+        default=None,
+        help='Output CSV file path (default: auto-routed under results/csv/...)'
     )
     parser.add_argument(
         '--summary', '-s',
-        default=SUMMARY_CSV,
-        help=f'Summary CSV file (default: {SUMMARY_CSV})'
+        default=None,
+        help='Summary CSV file path (default: auto-routed under results/summary/...)'
     )
     parser.add_argument(
         '--databases', '-db',
@@ -3094,8 +3329,13 @@ def main():
     )
     parser.add_argument(
         '--html',
-        default='report.html',
-        help='Output HTML report file path (default: report.html)'
+        default=None,
+        help='Output HTML report file path (default: auto-routed under results/html/...)'
+    )
+    parser.add_argument(
+        '--results-root',
+        default=str(PROJECT_ROOT / "results"),
+        help=f'Results root directory (default: {PROJECT_ROOT / "results"})'
     )
     parser.add_argument(
         '--serve',
@@ -3108,6 +3348,11 @@ def main():
         type=int,
         default=8000,
         help='Port for the local HTTP server (default: 8000)'
+    )
+    parser.add_argument(
+        '--log-file',
+        default=None,
+        help='Log file path for live output (default: results/logs/run_YYYYMMDD_HHMMSS.log)'
     )
     parser.add_argument(
         '--single-user-mode',
@@ -3158,6 +3403,31 @@ def main():
 
     args = parser.parse_args()
 
+    results_root = _resolve_results_root(args.results_root)
+
+    # Setup live logging to file (tee stdout/stderr)
+    log_fp = None
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+    if args.log_file is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        default_log_dir = results_root / "logs"
+        default_log_dir.mkdir(parents=True, exist_ok=True)
+        args.log_file = str(default_log_dir / f"run_{timestamp}.log")
+
+    try:
+        log_path = Path(args.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fp = open(log_path, "w", encoding="utf-8")
+        sys.stdout = _Tee(orig_stdout, log_fp)
+        sys.stderr = _Tee(orig_stderr, log_fp)
+        print(f"Logging live output to: {log_path}")
+    except Exception as e:
+        sys.stdout = orig_stdout
+        sys.stderr = orig_stderr
+        print(f"Warning: could not open log file '{args.log_file}': {e}")
+        log_fp = None
+
     # Apply test mode defaults
     if args.test:
         print("\n" + "="*60)
@@ -3168,10 +3438,10 @@ def main():
         if args.max_questions is None:
             args.max_questions = 5
         # Use test output files
-        if args.output == OUTPUT_CSV:
-            args.output = "test_" + OUTPUT_CSV
-        if args.summary == SUMMARY_CSV:
-            args.summary = "test_" + SUMMARY_CSV
+        # if args.output == OUTPUT_CSV:
+        #     args.output = "test_" + OUTPUT_CSV
+        # if args.summary == SUMMARY_CSV:
+        #     args.summary = "test_" + SUMMARY_CSV
         print(f"  Max databases: {args.max_databases}")
         print(f"  Max questions per db: {args.max_questions}")
         print(f"  Output file: {args.output}")
@@ -3214,6 +3484,9 @@ def main():
 
     output_source = args.output_source
     html_content = ""
+    html_path: Optional[Path] = None
+    csv_path: Optional[Path] = None
+    summary_path: Optional[Path] = None
     try:
         discover_cfg = build_discovery_config(args)
     except json.JSONDecodeError as e:
@@ -3259,12 +3532,75 @@ def main():
                 all_summaries.append(summary)
                 total_index_setup_time_ms += index_setup_time_ms
 
+        # Resolve output paths (auto-route when CLI paths not provided)
+        if args.html is not None:
+            html_path = Path(args.html)
+        else:
+            html_dir = _build_results_subdir(
+                results_root=results_root,
+                kind="html",
+                mode=args.mode,
+                search_type=discover_cfg.search_type,
+                scorer=discover_cfg.search_scorer,
+                single_user_mode=args.single_user_mode,
+            )
+            html_name = _build_result_filename(
+                ext="html",
+                search_type=discover_cfg.search_type,
+                scorer=discover_cfg.search_scorer,
+                text_weight=discover_cfg.text_score_weight,
+                vector_weight=discover_cfg.vector_score_weight,
+                text_penalty=discover_cfg.text_rank_penalty,
+                vector_penalty=discover_cfg.vector_rank_penalty,
+            )
+            html_path = html_dir / html_name
+
+        if output_source == 'csv':
+            if args.output is not None:
+                csv_path = Path(args.output)
+            else:
+                csv_dir = _build_results_subdir(
+                    results_root=results_root,
+                    kind="csv",
+                    mode=args.mode,
+                    search_type=discover_cfg.search_type,
+                    scorer=discover_cfg.search_scorer,
+                    single_user_mode=args.single_user_mode,
+                )
+                csv_name = _build_result_filename(
+                    ext="csv",
+                    search_type=discover_cfg.search_type,
+                    scorer=discover_cfg.search_scorer,
+                    text_weight=discover_cfg.text_score_weight,
+                    vector_weight=discover_cfg.vector_score_weight,
+                    text_penalty=discover_cfg.text_rank_penalty,
+                    vector_penalty=discover_cfg.vector_rank_penalty,
+                )
+                csv_path = csv_dir / csv_name
+
+            if args.summary is not None:
+                summary_path = Path(args.summary)
+            else:
+                summary_dir = _build_results_subdir(
+                    results_root=results_root,
+                    kind="summary",
+                    mode=args.mode,
+                    search_type=discover_cfg.search_type,
+                    scorer=discover_cfg.search_scorer,
+                    single_user_mode=args.single_user_mode,
+                )
+                summary_path = summary_dir / "summary.csv"
+
         # Write CSV results
         if output_source == 'csv':
             if all_results:
-                write_results_csv(all_results, args.output)
+                if csv_path is not None:
+                    csv_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_results_csv(all_results, str(csv_path))
             if all_summaries:
-                write_summary_csv(all_summaries, args.summary)
+                if summary_path is not None:
+                    summary_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_summary_csv(all_summaries, str(summary_path))
 
         run_params = {
             'connection_string': re.sub(r'/[^@]+@', '/***@', args.connection_string),
@@ -3303,14 +3639,14 @@ def main():
 
         html_content = generate_results_html(all_results, all_summaries, run_params)
 
-        html_path = Path(args.html)
-        if not html_path.is_absolute():
-            html_path = Path.cwd() / html_path
-        html_path.parent.mkdir(parents=True, exist_ok=True)
+        if html_path is not None:
+            if not html_path.is_absolute():
+                html_path = Path.cwd() / html_path
+            html_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        print(f"HTML report written to: {html_path}")
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            print(f"HTML report written to: {html_path}")
 
         # Print overall summary
         print(f"\n{'='*60}")
@@ -3332,14 +3668,17 @@ def main():
 
     finally:
         oracle_mgr.close()
+        if log_fp:
+            sys.stdout = orig_stdout
+            sys.stderr = orig_stderr
+            log_fp.close()
 
     # Launch browser server (after DB connection is closed)
     if output_source == 'browser' and all_results:
         start_results_server(html_content, port=args.port)
 
     # Start local server if requested (after DB cleanup)
-    if args.serve and args.html:
-        html_path = Path(args.html)
+    if args.serve and html_path:
         if not html_path.is_absolute():
             html_path = Path.cwd() / html_path
         if html_path.is_file():
