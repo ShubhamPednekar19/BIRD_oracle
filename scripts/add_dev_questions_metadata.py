@@ -34,6 +34,10 @@ try:
     from groq import Groq
 except ImportError:  # Optional dependency for --llm-provider groq
     Groq = None
+try:
+    import oci
+except ImportError:  # Optional dependency for --llm-provider oci
+    oci = None
 
 # SQL keywords to exclude from columns
 SQL_KEYWORDS = {
@@ -577,7 +581,9 @@ def _extract_json_object(text: str) -> Dict:
     """Extract a JSON object from raw LLM text output."""
     text = text.strip()
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -585,7 +591,10 @@ def _extract_json_object(text: str) -> Dict:
     end = text.rfind('}')
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found in LLM response")
-    return json.loads(text[start:end + 1])
+    parsed = json.loads(text[start:end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM response JSON is not an object")
+    return parsed
 
 
 def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
@@ -593,11 +602,17 @@ def _normalize_llm_table_payload(payload: Dict) -> List[Dict]:
     tables = payload.get("tables", [])
     cleaned = []
     for table in tables:
+        if not isinstance(table, dict):
+            continue
         name = str(table.get("name", "")).strip('`" ')
+        if "." in name:
+            name = name.split(".")[-1]
         if not name:
             continue
         cols = []
         for col in table.get("columns", []):
+            if not isinstance(col, dict):
+                continue
             col_name = str(col.get("name", "")).strip('`" ')
             if col_name and col_name.upper() not in SQL_KEYWORDS:
                 cols.append({"name": col_name})
@@ -612,7 +627,9 @@ def _build_batched_sql_prompt(sql_items: List[Tuple[int, str]]) -> Tuple[str, st
         "Return strict JSON only with this schema: "
         "{\"items\":[{\"index\":0,\"tables\":[{\"name\":\"table_name\",\"columns\":[{\"name\":\"column_name\"}]}]}]}. "
         "The index must match the provided item index. "
-        "Do not include markdown fences or extra text."
+        "Use unqualified table names only (no schema/database prefix). "
+        "Do not include markdown fences, comments, or extra text. "
+        "Return a single JSON object and nothing else."
     )
 
     lines = ["SQL items:"]
@@ -623,11 +640,85 @@ def _build_batched_sql_prompt(sql_items: List[Tuple[int, str]]) -> Tuple[str, st
     return instructions, "\n".join(lines)
 
 
+def _collect_text_candidates(value) -> List[str]:
+    """Collect all string candidates from a nested response object."""
+    candidates: List[str] = []
+    if isinstance(value, str):
+        candidates.append(value)
+        return candidates
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            candidates.extend(_collect_text_candidates(item))
+        return candidates
+    if isinstance(value, dict):
+        for item in value.values():
+            candidates.extend(_collect_text_candidates(item))
+        return candidates
+    if hasattr(value, "__dict__"):
+        for item in vars(value).values():
+            candidates.extend(_collect_text_candidates(item))
+    return candidates
+
+
+def _extract_json_from_response(response_obj) -> Dict:
+    """Find and parse the first JSON object in a response object."""
+    for candidate in _collect_text_candidates(response_obj):
+        try:
+            parsed = _extract_json_object(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+    raise RuntimeError("Unable to locate JSON object content in LLM response")
+
+
+def _coerce_llm_items(parsed: Dict, sql_items: List[Tuple[int, str]]) -> List[Dict]:
+    """Return standardized items list from LLM JSON payload."""
+    items = parsed.get("items")
+    if isinstance(items, list):
+        return items
+    tables = parsed.get("tables")
+    if tables is not None:
+        if len(sql_items) != 1:
+            raise RuntimeError("LLM response missing items for batched request")
+        return [{"index": sql_items[0][0], "tables": tables}]
+    raise RuntimeError("LLM response missing items/tables")
+
+
+def _extract_total_tokens(value) -> Optional[int]:
+    """Extract total token count from known response shapes."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        usage = value.get("usage")
+        if isinstance(usage, dict):
+            total = usage.get("total_tokens")
+            if isinstance(total, int):
+                return total
+        if "total_tokens" in value and isinstance(value.get("total_tokens"), int):
+            return value.get("total_tokens")
+        return None
+    usage = getattr(value, "usage", None)
+    if usage is not None:
+        total = getattr(usage, "total_tokens", None)
+        if isinstance(total, int):
+            return total
+        if isinstance(usage, dict):
+            total = usage.get("total_tokens")
+            if isinstance(total, int):
+                return total
+    total = getattr(value, "total_tokens", None)
+    if isinstance(total, int):
+        return total
+    return None
+
+
 
 def extract_tables_with_columns_llm_groq_batch(
     sql_items: List[Tuple[int, str]],
     model: str,
     api_key: str,
+    return_usage: bool = False,
 ) -> Dict[int, List[Dict]]:
     """Extract tables/columns for multiple SQL queries via the Groq Python SDK."""
     if Groq is None:
@@ -650,14 +741,18 @@ def extract_tables_with_columns_llm_groq_batch(
         raise RuntimeError("Unexpected Groq response shape") from exc
 
     parsed = _extract_json_object(content)
-    items = parsed.get("items", [])
+    items = _coerce_llm_items(parsed, sql_items)
     result: Dict[int, List[Dict]] = {}
     for item in items:
+        if not isinstance(item, dict):
+            continue
         try:
             idx = int(item.get("index"))
         except (TypeError, ValueError):
             continue
         result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    if return_usage:
+        return result, _extract_total_tokens(completion)
     return result
 
 
@@ -668,6 +763,7 @@ def extract_tables_with_columns_llm_chat_completions_batch(
     api_key: Optional[str],
     base_url: Optional[str],
     extra_headers: Optional[Dict[str, str]] = None,
+    return_usage: bool = False,
 ) -> Dict[int, List[Dict]]:
     """Extract tables/columns for multiple SQL queries via HTTP chat-completions-compatible APIs (OpenAI/OpenRouter)."""
     endpoint = (base_url or "https://api.openai.com/v1").rstrip('/') + "/chat/completions"
@@ -707,15 +803,88 @@ def extract_tables_with_columns_llm_chat_completions_batch(
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"Unexpected chat completion response shape: {body}") from exc
 
-    parsed = _extract_json_object(content)
-    items = parsed.get("items", [])
+    parsed = _extract_json_from_response(content)
+    items = _coerce_llm_items(parsed, sql_items)
     result: Dict[int, List[Dict]] = {}
     for item in items:
+        if not isinstance(item, dict):
+            continue
         try:
             idx = int(item.get("index"))
         except (TypeError, ValueError):
             continue
         result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    if return_usage:
+        return result, _extract_total_tokens(body)
+    return result
+
+
+def extract_tables_with_columns_llm_oci_batch(
+    sql_items: List[Tuple[int, str]],
+    compartment_id: str,
+    model_id: str,
+    endpoint: str,
+    config_profile: str = "DEFAULT",
+    config_file: Optional[str] = None,
+    temperature: float = 0.0,
+    max_tokens: int = 600,
+    top_p: float = 0.75,
+    return_usage: bool = False,
+) -> Dict[int, List[Dict]]:
+    """Extract tables/columns for multiple SQL queries via OCI Generative AI SDK."""
+    if oci is None:
+        raise RuntimeError("oci package is not installed; install it or use --llm-provider openai_compat/openrouter/groq/ollama")
+
+    instructions, user_prompt = _build_batched_sql_prompt(sql_items)
+    prompt = f"{instructions}\n\n{user_prompt}"
+
+    if config_file:
+        config = oci.config.from_file(config_file, config_profile)
+    else:
+        config = oci.config.from_file("~/.oci/config", config_profile)
+
+    client = oci.generative_ai_inference.GenerativeAiInferenceClient(
+        config=config,
+        service_endpoint=endpoint,
+        retry_strategy=oci.retry.NoneRetryStrategy(),
+        timeout=(10, 240),
+    )
+
+    content = oci.generative_ai_inference.models.TextContent()
+    content.text = prompt
+
+    message = oci.generative_ai_inference.models.Message()
+    message.role = "USER"
+    message.content = [content]
+
+    chat_request = oci.generative_ai_inference.models.GenericChatRequest()
+    chat_request.api_format = oci.generative_ai_inference.models.BaseChatRequest.API_FORMAT_GENERIC
+    chat_request.messages = [message]
+    chat_request.max_tokens = max_tokens
+    chat_request.temperature = temperature
+    chat_request.top_p = top_p
+    chat_request.frequency_penalty = 0
+    chat_request.presence_penalty = 0
+
+    chat_detail = oci.generative_ai_inference.models.ChatDetails()
+    chat_detail.serving_mode = oci.generative_ai_inference.models.OnDemandServingMode(model_id=model_id)
+    chat_detail.chat_request = chat_request
+    chat_detail.compartment_id = compartment_id
+
+    chat_response = client.chat(chat_detail)
+    parsed = _extract_json_from_response(chat_response)
+    items = _coerce_llm_items(parsed, sql_items)
+    result: Dict[int, List[Dict]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        result[idx] = _normalize_llm_table_payload({"tables": item.get("tables", [])})
+    if return_usage:
+        return result, _extract_total_tokens(chat_response)
     return result
 
 
@@ -746,6 +915,63 @@ def extract_tables_with_columns_llm_ollama(sql: str, model: str, base_url: Optio
     return _normalize_llm_table_payload(parsed)
 
 
+def _retry_llm_single_items(
+    sql_items: List[Tuple[int, str]],
+    llm_provider: str,
+    llm_model: str,
+    llm_api_key: Optional[str],
+    llm_base_url: Optional[str],
+    extra_headers: Optional[Dict[str, str]],
+    oci_compartment_id: Optional[str],
+    oci_model_id: Optional[str],
+    oci_endpoint: Optional[str],
+    oci_config_profile: str,
+    oci_config_file: Optional[str],
+    oci_temperature: float,
+    oci_max_tokens: int,
+    oci_top_p: float,
+) -> Dict[int, List[Dict]]:
+    """Retry LLM extraction one item at a time after batch parsing failures."""
+    result: Dict[int, List[Dict]] = {}
+    for idx, sql in sql_items:
+        try:
+            if llm_provider == "oci":
+                if not (oci_compartment_id and oci_model_id and oci_endpoint):
+                    continue
+                single = extract_tables_with_columns_llm_oci_batch(
+                    [(idx, sql)],
+                    compartment_id=oci_compartment_id,
+                    model_id=oci_model_id,
+                    endpoint=oci_endpoint,
+                    config_profile=oci_config_profile,
+                    config_file=oci_config_file,
+                    temperature=oci_temperature,
+                    max_tokens=oci_max_tokens,
+                    top_p=oci_top_p,
+                )
+            elif llm_provider == "groq":
+                if not llm_api_key:
+                    continue
+                single = extract_tables_with_columns_llm_groq_batch(
+                    [(idx, sql)],
+                    model=llm_model,
+                    api_key=llm_api_key,
+                )
+            else:
+                single = extract_tables_with_columns_llm_chat_completions_batch(
+                    [(idx, sql)],
+                    model=llm_model,
+                    api_key=llm_api_key,
+                    base_url=llm_base_url,
+                    extra_headers=extra_headers or None,
+                )
+        except Exception:
+            continue
+        if idx in single:
+            result[idx] = single[idx]
+    return result
+
+
 def process_dev_file(
     input_path: str,
     output_path: str,
@@ -756,7 +982,17 @@ def process_dev_file(
     llm_provider: str = "openai_compat",
     llm_site_url: Optional[str] = None,
     llm_app_name: Optional[str] = None,
-    llm_batch_size: int = 35,
+    llm_batch_size: int = 1,
+    oci_compartment_id: Optional[str] = None,
+    oci_model_id: Optional[str] = None,
+    oci_endpoint: Optional[str] = None,
+    oci_config_profile: str = "DEFAULT",
+    oci_config_file: Optional[str] = None,
+    oci_temperature: float = 0.0,
+    oci_max_tokens: int = 600,
+    oci_top_p: float = 0.75,
+    output_format: str = "json",
+    limit: Optional[int] = None,
 ) -> None:
     """
     Process the dev.json file and add tables with nested columns metadata
@@ -768,14 +1004,46 @@ def process_dev_file(
     """
     print(f"Reading input file: {input_path}")
 
-    with open(input_path, 'r', encoding='utf-8') as f:
-        questions = json.load(f)
+    input_is_jsonl = input_path.lower().endswith(".jsonl")
+    if input_is_jsonl:
+        questions = []
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                questions.append(json.loads(line))
+    else:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            questions = json.load(f)
+
+    # Normalize common JSONL fields to the expected schema
+    for idx, question in enumerate(questions):
+        if 'SQL' not in question and 'query' in question:
+            question['SQL'] = question['query']
+        if 'db_id' not in question and 'database_name' in question:
+            question['db_id'] = question['database_name']
+        if 'question_id' not in question:
+            question['question_id'] = idx
+
+    if limit is not None:
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
+        questions = questions[:limit]
 
     print(f"Processing {len(questions)} questions...")
 
     for question in questions:
         question['tables'] = []
 
+    total_questions = len(questions)
+    def _print_progress(done: int) -> None:
+        if total_questions == 0:
+            return
+        percent = (done / total_questions) * 100
+        print(f"\rProgress: {done}/{total_questions} ({percent:.1f}%)", end="", flush=True)
+
+    total_tokens_used = 0
     if method == "llm":
         if llm_provider == "ollama":
             for i, question in enumerate(questions):
@@ -789,8 +1057,71 @@ def process_dev_file(
                 except Exception as exc:
                     print(f"Warning: LLM extraction failed for question index {i} ({exc}); falling back to rule_based")
                     question['tables'] = extract_tables_with_columns(sql)
-                if (i + 1) % 100 == 0:
-                    print(f"  Processed {i + 1} questions...")
+                _print_progress(i + 1)
+        elif llm_provider == "oci":
+            if not oci_compartment_id:
+                raise RuntimeError("Missing OCI compartment id. Pass --oci-compartment-id.")
+            if not oci_model_id:
+                raise RuntimeError("Missing OCI model id. Pass --oci-model-id.")
+            if not oci_endpoint:
+                raise RuntimeError("Missing OCI endpoint. Pass --oci-endpoint.")
+            batch_size = max(1, llm_batch_size)
+            for batch_start in range(0, len(questions), batch_size):
+                batch_end = min(batch_start + batch_size, len(questions))
+                sql_items = [
+                    (idx, questions[idx].get('SQL', ''))
+                    for idx in range(batch_start, batch_end)
+                ]
+                try:
+                    batch_result, batch_tokens = extract_tables_with_columns_llm_oci_batch(
+                        sql_items,
+                        compartment_id=oci_compartment_id,
+                        model_id=oci_model_id,
+                        endpoint=oci_endpoint,
+                        config_profile=oci_config_profile,
+                        config_file=oci_config_file,
+                        temperature=oci_temperature,
+                        max_tokens=oci_max_tokens,
+                        top_p=oci_top_p,
+                        return_usage=True,
+                    )
+                except Exception as exc:
+                    print(
+                        f"Warning: LLM batch extraction failed for indexes {batch_start}-{batch_end - 1} ({exc}); "
+                        "retrying single-item LLM requests for this batch"
+                    )
+                    batch_tokens = None
+                    if "missing items/tables" in str(exc).lower():
+                        batch_result = _retry_llm_single_items(
+                            sql_items,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
+                            llm_api_key=None,
+                            llm_base_url=None,
+                            extra_headers=None,
+                            oci_compartment_id=oci_compartment_id,
+                            oci_model_id=oci_model_id,
+                            oci_endpoint=oci_endpoint,
+                            oci_config_profile=oci_config_profile,
+                            oci_config_file=oci_config_file,
+                            oci_temperature=oci_temperature,
+                            oci_max_tokens=oci_max_tokens,
+                            oci_top_p=oci_top_p,
+                        )
+                    else:
+                        batch_result = {}
+
+                if batch_tokens is not None:
+                    total_tokens_used += batch_tokens
+                    print(f"\nLLM tokens used (batch {batch_start}-{batch_end - 1}): {batch_tokens}")
+
+                for idx, sql in sql_items:
+                    if idx in batch_result:
+                        questions[idx]['tables'] = batch_result[idx]
+                    else:
+                        questions[idx]['tables'] = extract_tables_with_columns(sql)
+
+                _print_progress(batch_end)
         else:
             effective_api_key = llm_api_key
             effective_base_url = llm_base_url
@@ -822,25 +1153,50 @@ def process_dev_file(
                 ]
                 try:
                     if llm_provider == "groq":
-                        batch_result = extract_tables_with_columns_llm_groq_batch(
+                        batch_result, batch_tokens = extract_tables_with_columns_llm_groq_batch(
                             sql_items,
                             model=llm_model,
                             api_key=effective_api_key,
+                            return_usage=True,
                         )
                     else:
-                        batch_result = extract_tables_with_columns_llm_chat_completions_batch(
+                        batch_result, batch_tokens = extract_tables_with_columns_llm_chat_completions_batch(
                             sql_items,
                             model=llm_model,
                             api_key=effective_api_key,
                             base_url=effective_base_url,
                             extra_headers=extra_headers or None,
+                            return_usage=True,
                         )
                 except Exception as exc:
                     print(
                         f"Warning: LLM batch extraction failed for indexes {batch_start}-{batch_end - 1} ({exc}); "
-                        "falling back to rule_based for this batch"
+                        "retrying single-item LLM requests for this batch"
                     )
-                    batch_result = {}
+                    batch_tokens = None
+                    if "missing items/tables" in str(exc).lower():
+                        batch_result = _retry_llm_single_items(
+                            sql_items,
+                            llm_provider=llm_provider,
+                            llm_model=llm_model,
+                            llm_api_key=effective_api_key,
+                            llm_base_url=effective_base_url,
+                            extra_headers=extra_headers,
+                            oci_compartment_id=None,
+                            oci_model_id=None,
+                            oci_endpoint=None,
+                            oci_config_profile="DEFAULT",
+                            oci_config_file=None,
+                            oci_temperature=0.0,
+                            oci_max_tokens=0,
+                            oci_top_p=0.0,
+                        )
+                    else:
+                        batch_result = {}
+
+                if batch_tokens is not None:
+                    total_tokens_used += batch_tokens
+                    print(f"\nLLM tokens used (batch {batch_start}-{batch_end - 1}): {batch_tokens}")
 
                 for idx, sql in sql_items:
                     if idx in batch_result:
@@ -848,23 +1204,30 @@ def process_dev_file(
                     else:
                         questions[idx]['tables'] = extract_tables_with_columns(sql)
 
-                if batch_end % 100 == 0 or batch_end == len(questions):
-                    print(f"  Processed {batch_end} questions...")
+                _print_progress(batch_end)
     else:
         for i, question in enumerate(questions):
             sql = question.get('SQL', '')
             question['tables'] = extract_tables_with_columns(sql)
-            if (i + 1) % 100 == 0:
-                print(f"  Processed {i + 1} questions...")
+            _print_progress(i + 1)
+
+    if total_questions > 0:
+        print()
+    if total_tokens_used > 0:
+        print(f"Total LLM tokens used: {total_tokens_used}")
 
     for question in questions:
-        sql = question.get('SQL', '')
-        question['oracle_SQL'] = convert_sqlite_to_oracle_sql(sql)
+        question.pop('oracle_SQL', None)
+        question.pop('difficulty', None)
 
     print(f"Writing output file: {output_path}")
-
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(questions, f, indent=2, ensure_ascii=False)
+    if output_format == "jsonl":
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for item in questions:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    else:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(questions, f, indent=2, ensure_ascii=False)
 
     print("Done!")
 
@@ -880,6 +1243,137 @@ def process_dev_file(
     print(f"  Total column references: {total_columns}")
     print(f"  Average tables per question: {total_tables / len(questions):.2f}")
     print(f"  Average columns per question: {total_columns / len(questions):.2f}")
+
+
+def run_llm_test(
+    sql: str,
+    llm_model: str,
+    llm_api_key: Optional[str],
+    llm_base_url: Optional[str],
+    llm_provider: str,
+    llm_site_url: Optional[str],
+    llm_app_name: Optional[str],
+    oci_compartment_id: Optional[str],
+    oci_model_id: Optional[str],
+    oci_endpoint: Optional[str],
+    oci_config_profile: str,
+    oci_config_file: Optional[str],
+    oci_temperature: float,
+    oci_max_tokens: int,
+    oci_top_p: float,
+) -> None:
+    """Run a single LLM extraction to validate pipeline wiring."""
+    print("Running LLM test mode...")
+    print(f"Provider: {llm_provider}")
+    print(f"SQL:\n{sql}")
+
+    if llm_provider == "ollama":
+        tables = extract_tables_with_columns_llm_ollama(
+            sql,
+            model=llm_model,
+            base_url=llm_base_url,
+        )
+        payload = {
+            "question_id": 0,
+            "db_id": "test_db",
+            "question": "test",
+            "evidence": "",
+            "SQL": sql,
+            "tables": tables,
+        }
+        print("\nFull question object:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        print("\nTotal tokens: 0")
+        return
+
+    if llm_provider == "oci":
+        if not oci_compartment_id:
+            raise RuntimeError("Missing OCI compartment id. Pass --oci-compartment-id.")
+        if not oci_model_id:
+            raise RuntimeError("Missing OCI model id. Pass --oci-model-id.")
+        if not oci_endpoint:
+            raise RuntimeError("Missing OCI endpoint. Pass --oci-endpoint.")
+        sql_items = [(0, sql)]
+        result, total_tokens = extract_tables_with_columns_llm_oci_batch(
+            sql_items,
+            compartment_id=oci_compartment_id,
+            model_id=oci_model_id,
+            endpoint=oci_endpoint,
+            config_profile=oci_config_profile,
+            config_file=oci_config_file,
+            temperature=oci_temperature,
+            max_tokens=oci_max_tokens,
+            top_p=oci_top_p,
+            return_usage=True,
+        )
+        tables = result.get(0, [])
+        payload = {
+            "question_id": 0,
+            "db_id": "test_db",
+            "question": "test",
+            "evidence": "",
+            "SQL": sql,
+            "tables": tables,
+        }
+        print("\nFull question object:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        if total_tokens is not None:
+            print(f"\nTotal tokens: {total_tokens}")
+        return
+
+    effective_api_key = llm_api_key
+    effective_base_url = llm_base_url
+    extra_headers: Dict[str, str] = {}
+
+    if llm_provider == "openrouter":
+        effective_api_key = effective_api_key or os.getenv("OPENROUTER_API_KEY")
+        effective_base_url = effective_base_url or "https://openrouter.ai/api/v1"
+        if not effective_api_key:
+            raise RuntimeError("Missing OpenRouter API key. Pass --llm-api-key or set OPENROUTER_API_KEY.")
+        if llm_site_url:
+            extra_headers["HTTP-Referer"] = llm_site_url
+        if llm_app_name:
+            extra_headers["X-Title"] = llm_app_name
+    elif llm_provider == "groq":
+        effective_api_key = effective_api_key or os.getenv("GROQ_API_KEY")
+        effective_base_url = effective_base_url or "https://api.groq.com/openai/v1"
+        if not effective_api_key:
+            raise RuntimeError("Missing Groq API key. Pass --llm-api-key or set GROQ_API_KEY.")
+    else:
+        effective_api_key = effective_api_key or os.getenv("OPENAI_API_KEY")
+
+    sql_items = [(0, sql)]
+    if llm_provider == "groq":
+        result, total_tokens = extract_tables_with_columns_llm_groq_batch(
+            sql_items,
+            model=llm_model,
+            api_key=effective_api_key,
+            return_usage=True,
+        )
+    else:
+        result, total_tokens = extract_tables_with_columns_llm_chat_completions_batch(
+            sql_items,
+            model=llm_model,
+            api_key=effective_api_key,
+            base_url=effective_base_url,
+            extra_headers=extra_headers or None,
+            return_usage=True,
+        )
+
+    tables = result.get(0, [])
+    payload = {
+        "question_id": 0,
+        "db_id": "test_db",
+        "question": "test",
+        "evidence": "",
+        "SQL": sql,
+        "tables": tables,
+    }
+
+    print("\nFull question object:")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if total_tokens is not None:
+        print(f"\nTotal tokens: {total_tokens}")
 
 
 
@@ -901,9 +1395,9 @@ def main():
     parser.add_argument("--llm-base-url", default=None, help="Base URL for OpenAI-compatible endpoint")
     parser.add_argument(
         "--llm-provider",
-        choices=["openai_compat", "openrouter", "groq", "ollama"],
+        choices=["openai_compat", "openrouter", "groq", "ollama", "oci"],
         default="openai_compat",
-        help="LLM backend for --method llm. Supports openai_compat, openrouter, groq, and ollama.",
+        help="LLM backend for --method llm. Supports openai_compat, openrouter, groq, ollama, and oci.",
     )
     parser.add_argument(
         "--llm-site-url",
@@ -918,12 +1412,66 @@ def main():
     parser.add_argument(
         "--llm-batch-size",
         type=int,
-        default=35,
-        help="Number of questions sent in one LLM request for OpenAI-compatible providers.",
+        default=1,
+        help="Number of questions sent in one LLM request for OpenAI-compatible providers (default: 1).",
+    )
+    parser.add_argument("--oci-compartment-id", default=None, help="OCI compartment OCID for Generative AI.")
+    parser.add_argument("--oci-model-id", default=None, help="OCI model OCID for Generative AI.")
+    parser.add_argument(
+        "--oci-endpoint",
+        default=None,
+        help="OCI Generative AI inference endpoint, e.g. https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+    )
+    parser.add_argument("--oci-config-profile", default="DEFAULT", help="OCI config profile name")
+    parser.add_argument("--oci-config-file", default=None, help="OCI config file path (defaults to ~/.oci/config)")
+    parser.add_argument("--oci-temperature", type=float, default=0.0, help="OCI LLM temperature")
+    parser.add_argument("--oci-max-tokens", type=int, default=600, help="OCI LLM max tokens")
+    parser.add_argument("--oci-top-p", type=float, default=0.75, help="OCI LLM top_p")
+    parser.add_argument(
+        "--output-format",
+        choices=["json", "jsonl"],
+        default="json",
+        help="Output format (default: json).",
+    )
+    parser.add_argument("--test-llm", action="store_true", help="Run a single LLM extraction and exit.")
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="Process only the first N questions (default: 20).",
+    )
+    parser.add_argument(
+        "--test-limit",
+        type=int,
+        default=20,
+        help="Number of questions to process in --test-mode (default: 20).",
+    )
+    parser.add_argument(
+        "--test-sql",
+        default="SELECT P.PERCENTAGE,\n       M.MAX_UNIVERSITY\nFROM (\n  SELECT CAST(SUM(CASE WHEN T2.SCORE > 80 THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) AS PERCENTAGE\n  FROM UNIVERSITY.RANKING_CRITERIA T1\n  INNER JOIN UNIVERSITY.RANKING_YEAR T2 ON T1.ID = T2.RANKING_CRITERIA_ID\n  INNER JOIN UNIVERSITY.UNIVERSITY T3 ON T3.ID = T2.UNIVERSITY.ID\n  WHERE T1.CRITERIA_NAME = 'International'\n    AND T2.YEAR = 2016\n) P\nCROSS JOIN (\n  SELECT T3.UNIVERSITY.NAME AS MAX_UNIVERSITY\n  FROM UNIVERSITY.RANKING_CRITERIA T1\n  INNER JOIN UNIVERSITY.RANKING_YEAR T2 ON T1.ID = T2.RANKING_CRITERIA_ID\n  INNER JOIN UNIVERSITY.UNIVERSITY T3 ON T3.ID = T2.UNIVERSITY.ID\n  WHERE T1.CRITERIA_NAME = 'International'\n    AND T2.YEAR = 2016\n    AND T2.SCORE > 80\n  ORDER BY T2.SCORE DESC\n  FETCH FIRST 1 ROWS ONLY\n) M",
+        help="SQL to use with --test-llm.",
     )
     args = parser.parse_args()
 
     output_path = args.output_dev if args.output_dev else args.input_dev
+    if args.test_llm:
+        run_llm_test(
+            sql=args.test_sql,
+            llm_model=args.llm_model,
+            llm_api_key=args.llm_api_key,
+            llm_base_url=args.llm_base_url,
+            llm_provider=args.llm_provider,
+            llm_site_url=args.llm_site_url,
+            llm_app_name=args.llm_app_name,
+            oci_compartment_id=args.oci_compartment_id,
+            oci_model_id=args.oci_model_id,
+            oci_endpoint=args.oci_endpoint,
+            oci_config_profile=args.oci_config_profile,
+            oci_config_file=args.oci_config_file,
+            oci_temperature=args.oci_temperature,
+            oci_max_tokens=args.oci_max_tokens,
+            oci_top_p=args.oci_top_p,
+        )
+        return
     process_dev_file(
         args.input_dev,
         output_path,
@@ -935,8 +1483,18 @@ def main():
         llm_site_url=args.llm_site_url,
         llm_app_name=args.llm_app_name,
         llm_batch_size=args.llm_batch_size,
+        oci_compartment_id=args.oci_compartment_id,
+        oci_model_id=args.oci_model_id,
+        oci_endpoint=args.oci_endpoint,
+        oci_config_profile=args.oci_config_profile,
+        oci_config_file=args.oci_config_file,
+        oci_temperature=args.oci_temperature,
+        oci_max_tokens=args.oci_max_tokens,
+        oci_top_p=args.oci_top_p,
+        output_format=args.output_format,
+        limit=args.test_limit if args.test_mode else None,
     )
 
 
 if __name__ == "__main__":
-    main()
+    main()    
