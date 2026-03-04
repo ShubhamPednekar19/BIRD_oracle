@@ -218,6 +218,7 @@ def generate_metadata_sql(db_name: str, table_name: str, columns: List[Dict]) ->
     """Generate Oracle SQL statements for metadata."""
     statements = []
 
+    table_name = table_name.upper()
     quoted_table = quote_identifier(table_name)
 
     for col in columns:
@@ -225,6 +226,7 @@ def generate_metadata_sql(db_name: str, table_name: str, columns: List[Dict]) ->
         col_desc = col['column_description']
         value_desc = col['value_description']
 
+        col_name = col_name.upper()
         quoted_col = quote_identifier(col_name)
 
         # Generate COMMENT ON COLUMN if description is valid
