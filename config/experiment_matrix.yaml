@@ -11,30 +11,30 @@
 
 {
   "connection_string": "xxx",
-  "modes": ["unified", "parallel"],
-  "search_types": ["vector", "hybrid"],
-  "hybrid_scorers": ["RSF", "RRF"],
-  "dataset_forms": ["single-user", "multiple"],
+  "modes": ["parallel"],
+  "search_types": ["hybrid"],
+  "hybrid_scorers": ["RRF"],
+  "dataset_forms": ["single-user"],
 
   "common": {
-    "discover_k": 10,
+    "discover_k": 15,
     "discover_score_threshold": 0.60
   },
 
   "scorer_overrides": {
     "RSF": {
-      "discover_vector_score_weight": [10],
-      "discover_text_score_weight": [2, 4, 6]
+      "discover_vector_score_weight": [2, 4, 6, 8],
+      "discover_text_score_weight": [10]
     },
     "RRF": {
-      "discover_vector_rank_penalty": 2,
-      "discover_text_rank_penalty": 1
+      "discover_vector_rank_penalty": [5],
+      "discover_text_rank_penalty": [4, 3, 2, 1]
     }
   },
 
-  "results_root": "results",
+  "results_root": "results_dev",
 
   # Optional extra CLI args appended to every run
   # "passthrough_args": ["--max-questions", "100"]
-  "passthrough_args": []
+  "passthrough_args": ["--ddl-dir", "data/oracle_ddl", "--metadata-file", "data/questions/dev_with_metadata.json"]
 }

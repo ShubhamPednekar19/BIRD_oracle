@@ -40,7 +40,6 @@ def _validate(config: dict[str, Any]) -> None:
         "search_types",
         "dataset_forms",
         "common",
-        "results_root",
     ]
     missing = [k for k in required if k not in config]
     if missing:
@@ -107,26 +106,6 @@ def _expand_scorer_variants(config: dict[str, Any], scorer: str | None) -> list[
     return variants
 
 
-def _experiment_path(
-    results_root: Path,
-    mode: str,
-    search_type: str,
-    scorer: str | None,
-    variant_label: str,
-    dataset_form: str,
-) -> Path:
-    parts = [results_root, mode, search_type]
-    if scorer:
-        parts.append(scorer.lower())
-        if variant_label != "base":
-            parts.append(variant_label)
-    parts.append(dataset_form)
-    out = Path(parts[0])
-    for p in parts[1:]:
-        out = out / p
-    return out
-
-
 def _build_command(
     config: dict[str, Any],
     mode: str,
@@ -134,7 +113,6 @@ def _build_command(
     scorer: str | None,
     scorer_override: dict[str, Any],
     dataset_form: str,
-    out_dir: Path,
 ) -> list[str]:
     common = config.get("common", {})
 
@@ -149,14 +127,8 @@ def _build_command(
         search_type,
         "--discover-k",
         str(common.get("discover_k", 10)),
-        "--discover-unified-score-threshold",
-        str(common.get("discover_score_threshold", 0.60)),
-        "--output",
-        str(out_dir / "results.csv"),
-        "--summary",
-        str(out_dir / "summary.csv"),
-        "--html",
-        str(out_dir / "report.html"),
+        "--discover-score-threshold",
+        str(common.get("discover_score_threshold", 0.60))
     ]
 
     if dataset_form == "single-user":
@@ -190,9 +162,6 @@ def main() -> int:
     config = _load_config(Path(args.config))
     _validate(config)
 
-    results_root = Path(config.get("results_root", "results"))
-    results_root.mkdir(parents=True, exist_ok=True)
-
     total = 0
     failures = 0
 
@@ -204,11 +173,8 @@ def main() -> int:
         for scorer in scorers:
             scorer_variants = _expand_scorer_variants(config, scorer)
             for variant_label, scorer_override in scorer_variants:
-                out_dir = _experiment_path(results_root, mode, search_type, scorer, variant_label, dataset_form)
-                out_dir.mkdir(parents=True, exist_ok=True)
-
                 cmd = _build_command(
-                    config, mode, search_type, scorer, scorer_override, dataset_form, out_dir
+                    config, mode, search_type, scorer, scorer_override, dataset_form
                 )
                 total += 1
 
