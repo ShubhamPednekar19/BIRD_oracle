@@ -325,26 +325,27 @@ CREATE OR REPLACE PACKAGE BODY developer AS
   ) IS
     l_vector JSON_OBJECT_T := JSON_OBJECT_T();
     l_text JSON_OBJECT_T := JSON_OBJECT_T();
-    l_contains CLOB;
+    l_enable_text BOOLEAN;
   BEGIN
 
 
     l_vector.put('search_text', p_query);
     l_vector.put('search_mode', UPPER(NVL(p_vector_search_mode, 'DOCUMENT')));
 
-    l_contains := p_text_contains;
-    IF l_contains IS NOT NULL THEN
-      l_text.put('contains', l_contains);
+    l_enable_text := (p_text_contains IS NOT NULL);
+    IF l_enable_text THEN
+      l_text.put('search_text', p_query);
       l_text.put('score_weight', NVL(p_text_score_weight, 10));
       l_text.put('rank_penalty', NVL(p_text_rank_penalty, 1));
+    END IF;
 
-      l_vector.put('aggregator', UPPER(NVL(p_vector_aggregator, 'MAX')));
-      l_vector.put('score_weight', NVL(p_vector_score_weight, 1));
-      l_vector.put('rank_penalty', NVL(p_vector_rank_penalty, 5)); 
+    l_vector.put('aggregator', UPPER(NVL(p_vector_aggregator, 'MAX')));
+    l_vector.put('score_weight', NVL(p_vector_score_weight, 1));
+    l_vector.put('rank_penalty', NVL(p_vector_rank_penalty, 5)); 
 
+    IF l_enable_text THEN
       p_req.put('search_scorer', UPPER(NVL(p_search_scorer, 'RSF')));
       p_req.put('search_fusion', UPPER(NVL(p_search_fusion, 'UNION')));
-
       p_req.put('text', l_text);
     END IF;
     
@@ -1761,16 +1762,16 @@ CREATE PUBLIC SYNONYM developer FOR SYS.developer;
 -- /
 
 -- 2) Setup model + vectorizer + datastores + section groups + all 3 hybrid indexes
-BEGIN
-  developer.setup_hybrid_search(
-    p_model_dir  => 'ONNX_IMPORT',
-    p_model_file => 'MiniLM.onnx',
-    p_model_name => 'ALL_MINILM_L6',
-    p_vectorizer => 'VEC_MINILM_IVF',
-    p_create_obj_col_indexes => FALSE
-  );
-END;
-/
+-- BEGIN
+--   developer.setup_hybrid_search(
+--     p_model_dir  => 'ONNX_IMPORT',
+--     p_model_file => 'MiniLM.onnx',
+--     p_model_name => 'ALL_MINILM_L6',
+--     p_vectorizer => 'VEC_MINILM_IVF',
+--     p_create_obj_col_indexes => FALSE
+--   );
+-- END;
+-- /
 
 -- 3a) Sequential discovery
 -- DECLARE
