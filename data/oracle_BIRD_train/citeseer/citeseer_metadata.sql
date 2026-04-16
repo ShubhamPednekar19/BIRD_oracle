@@ -1,0 +1,10 @@
+COMMENT ON COLUMN CITES.CITED_PAPER_ID IS 'cited_paper_id is the ID of the paper being cited';
+ALTER TABLE CITES MODIFY (CITED_PAPER_ID ANNOTATIONS (ADD value_description 'cited_paper_id is the ID of the paper being cited'));
+COMMENT ON COLUMN CITES.CITING_PAPER_ID IS 'citing_paper_id stands for the paper which contains the citation';
+ALTER TABLE CITES MODIFY (CITING_PAPER_ID ANNOTATIONS (ADD value_description 'citing_paper_id stands for the paper which contains the citation'));
+COMMENT ON COLUMN "CONTENT".PAPER_ID IS 'unique string ID of the paper';
+ALTER TABLE "CONTENT" MODIFY (PAPER_ID ANNOTATIONS (ADD value_description 'unique string ID of the paper'));
+COMMENT ON COLUMN "CONTENT".WORD_CITED_ID IS 'rtype';
+ALTER TABLE "CONTENT" MODIFY (WORD_CITED_ID ANNOTATIONS (ADD value_description 'whether each word in the vocabulary is present (indicated by 1) or absent (indicated by 0) in the paper'));
+COMMENT ON COLUMN PAPER.PAPER_ID IS 'unique string ID of the paper';
+ALTER TABLE PAPER MODIFY (PAPER_ID ANNOTATIONS (ADD value_description 'unique string ID of the paper'));

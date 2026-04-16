@@ -1,0 +1,13 @@
+COMMENT ON COLUMN GENERALINFO.ID_RESTAURANT IS 'the unique id for the restaurant';
+COMMENT ON COLUMN GENERALINFO.LABEL IS 'the label of the restaurant';
+COMMENT ON COLUMN GENERALINFO.FOOD_TYPE IS 'the food type';
+COMMENT ON COLUMN GENERALINFO.CITY IS 'the city where the restaurant is located in';
+COMMENT ON COLUMN GENERALINFO.REVIEW IS 'the review of the restaurant';
+ALTER TABLE GENERALINFO MODIFY (REVIEW ANNOTATIONS (ADD value_description 'commonsense evidence:the review rating is from 0.0 to 5.0The high review rating is positively correlated with the overall level of the restaurant. The restaurant with higher review rating is usually more popular among diners.'));
+COMMENT ON COLUMN GEOGRAPHIC.CITY IS 'the city';
+COMMENT ON COLUMN GEOGRAPHIC.COUNTY IS 'the country the city belongs to';
+COMMENT ON COLUMN GEOGRAPHIC.REGION IS 'corresponding regions';
+COMMENT ON COLUMN "LOCATION".ID_RESTAURANT IS 'the unique id for the restaurant';
+COMMENT ON COLUMN "LOCATION".STREET_NUM IS 'the street number of the restaurant';
+COMMENT ON COLUMN "LOCATION".STREET_NAME IS 'the street name of the restaurant';
+COMMENT ON COLUMN "LOCATION".CITY IS 'the city where the restaurant is located in';

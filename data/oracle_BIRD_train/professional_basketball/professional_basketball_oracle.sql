@@ -1,0 +1,244 @@
+CREATE TABLE "PLAYERS"
+(PLAYERID      VARCHAR2(255)   
+        PRIMARY KEY,
+    USEFIRST      VARCHAR2(255) NULL,
+    FIRSTNAME     VARCHAR2(255) NULL,
+    MIDDLENAME    VARCHAR2(255) NULL,
+    LASTNAME      VARCHAR2(255) NULL,
+    NAMEGIVEN     VARCHAR2(255) NULL,
+    FULLGIVENNAME VARCHAR2(255) NULL,
+    NAMESUFFIX    VARCHAR2(255) NULL,
+    NAMENICK      VARCHAR2(255) NULL,
+    POS           VARCHAR2(255) NULL,
+    FIRSTSEASON   INTEGER          NULL,
+    LASTSEASON    INTEGER         NULL,
+    HEIGHT        FLOAT        NULL,
+    WEIGHT        INTEGER         NULL,
+    COLLEGE       VARCHAR2(255) NULL,
+    COLLEGEOTHER  VARCHAR2(255) NULL,
+    BIRTHDATE     DATE         NULL,
+    BIRTHCITY     VARCHAR2(255) NULL,
+    BIRTHSTATE    VARCHAR2(255) NULL,
+    BIRTHCOUNTRY  VARCHAR2(255) NULL,
+    HIGHSCHOOL    VARCHAR2(255) NULL,
+    HSCITY        VARCHAR2(255) NULL,
+    HSSTATE       VARCHAR2(255) NULL,
+    HSCOUNTRY     VARCHAR2(255) NULL,
+    DEATHDATE     DATE         NULL,
+    RACE          VARCHAR2(255) NULL
+);
+
+CREATE TABLE "AWARDS_PLAYERS"
+(PLAYERID VARCHAR2(255)   ,
+    AWARD    VARCHAR2(255)   ,
+    YEAR     INTEGER            ,
+    LGID     VARCHAR2(255) NULL,
+    NOTE     VARCHAR2(255) NULL,
+    POS      VARCHAR2(255) NULL,
+    PRIMARY KEY (PLAYERID, YEAR, AWARD),
+    FOREIGN KEY (PLAYERID) REFERENCES "PLAYERS" (PLAYERID)
+              ON DELETE CASCADE
+);
+
+CREATE TABLE "TEAMS"
+(YEAR        INTEGER            ,
+    LGID        VARCHAR2(255) NULL,
+    TMID        VARCHAR2(255)   ,
+    FRANCHID    VARCHAR2(255) NULL,
+    CONFID      VARCHAR2(255) NULL,
+    DIVID       VARCHAR2(255) NULL,
+    RANK      INTEGER          NULL,
+    CONFRANK    INTEGER          NULL,
+    PLAYOFF     VARCHAR2(255) NULL,
+    NAME        VARCHAR2(255) NULL,
+    O_FGM       INTEGER          NULL,
+--     O_FGA       INTEGER          NULL,
+    O_FTM       INTEGER          NULL,
+--     O_FTA       INTEGER          NULL,
+--     O_3PM       INTEGER          NULL,
+--     O_3PA       INTEGER          NULL,
+--     O_OREB      INTEGER          NULL,
+--     O_DREB      INTEGER          NULL,
+--     O_REB       INTEGER          NULL,
+--     O_ASTS      INTEGER          NULL,
+--     O_PF        INTEGER          NULL,
+--     O_STL       INTEGER          NULL,
+--     O_TO        INTEGER          NULL,
+--     O_BLK       INTEGER          NULL,
+     O_PTS       INTEGER          NULL,
+--     D_FGM       INTEGER          NULL,
+--     D_FGA       INTEGER          NULL,
+--     D_FTM       INTEGER          NULL,
+--     D_FTA       INTEGER          NULL,
+--     D_3PM       INTEGER          NULL,
+--     D_3PA       INTEGER          NULL,
+--     D_OREB      INTEGER          NULL,
+--     D_DREB      INTEGER          NULL,
+--     D_REB       INTEGER          NULL,
+--     D_ASTS      INTEGER          NULL,
+--     D_PF        INTEGER          NULL,
+--     D_STL       INTEGER          NULL,
+--     D_TO        INTEGER          NULL,
+--     D_BLK       INTEGER          NULL,
+     D_PTS       INTEGER          NULL,
+--     O_TMREBOUND INTEGER          NULL,
+--     D_TMREBOUND INTEGER          NULL,
+    HOMEWON     INTEGER          NULL,
+    HOMELOST    INTEGER          NULL,
+    AWAYWON     INTEGER          NULL,
+    AWAYLOST    INTEGER          NULL,
+--     NEUTWON     INTEGER          NULL,
+--     NEUTLOSS    INTEGER          NULL,
+--     CONFWON     INTEGER          NULL,
+--     CONFLOSS    INTEGER          NULL,
+--     DIVWON      INTEGER          NULL,
+--     DIVLOSS     INTEGER          NULL,
+--     PACE        INTEGER          NULL,
+    WON         INTEGER          NULL,
+    LOST        INTEGER          NULL,
+    GAMES       INTEGER          NULL,
+--     MIN         INTEGER          NULL,
+    ARENA       VARCHAR2(255) NULL,
+--     ATTENDANCE  INTEGER          NULL,
+--     BBTMID      VARCHAR(255) NULL,
+    PRIMARY KEY (YEAR, TMID)
+);
+
+CREATE TABLE "COACHES"
+(COACHID     VARCHAR2(255)   ,
+    YEAR        INTEGER            ,
+    TMID        VARCHAR2(255)   ,
+    LGID        VARCHAR2(255) NULL,
+    STINT       INTEGER            ,
+    WON         INTEGER          NULL,
+    LOST        INTEGER          NULL,
+    POST_WINS   INTEGER          NULL,
+    POST_LOSSES INTEGER          NULL,
+    
+    FOREIGN KEY (TMID, YEAR) REFERENCES "TEAMS" (TMID, YEAR)
+              ON DELETE CASCADE
+);
+
+CREATE TABLE "DRAFT"
+(ID             INTEGER DEFAULT 0   
+        PRIMARY KEY,
+    DRAFTYEAR      INTEGER           NULL,
+    DRAFTROUND     INTEGER           NULL,
+    DRAFTSELECTION INTEGER           NULL,
+    DRAFTOVERALL   INTEGER          NULL,
+    TMID           VARCHAR2(255)  NULL,
+    FIRSTNAME      VARCHAR2(255)  NULL,
+    LASTNAME       VARCHAR2(255)  NULL,
+    SUFFIXNAME     VARCHAR2(255)  NULL,
+    PLAYERID       VARCHAR2(255)  NULL,
+    DRAFTFROM      VARCHAR2(255)  NULL,
+    LGID           VARCHAR2(255)  NULL,
+    FOREIGN KEY (TMID, DRAFTYEAR) REFERENCES "TEAMS" (TMID, YEAR)
+              ON DELETE CASCADE
+);
+
+CREATE TABLE "PLAYER_ALLSTAR"
+(PLAYERID        VARCHAR2(255)   ,
+    LAST_NAME       VARCHAR2(255) NULL,
+    FIRST_NAME      VARCHAR2(255) NULL,
+    SEASON_ID       INTEGER            ,
+    CONFERENCE      VARCHAR2(255) NULL,
+    LEAGUE_ID       VARCHAR2(255) NULL,
+    GAMES_PLAYED    INTEGER          NULL,
+    MINUTES         INTEGER          NULL,
+    POINTS          INTEGER          NULL,
+    O_REBOUNDS      INTEGER          NULL,
+    D_REBOUNDS      INTEGER          NULL,
+    REBOUNDS        INTEGER          NULL,
+    ASSISTS         INTEGER          NULL,
+    STEALS          INTEGER          NULL,
+    BLOCKS          INTEGER          NULL,
+    TURNOVERS       INTEGER          NULL,
+    PERSONAL_FOULS  INTEGER          NULL,
+    FG_ATTEMPTED    INTEGER          NULL,
+    FG_MADE         INTEGER          NULL,
+    FT_ATTEMPTED    INTEGER          NULL,
+    FT_MADE         INTEGER          NULL,
+    THREE_ATTEMPTED INTEGER          NULL,
+    THREE_MADE      INTEGER          NULL,
+    PRIMARY KEY (PLAYERID, SEASON_ID),
+    FOREIGN KEY (PLAYERID) REFERENCES "PLAYERS" (PLAYERID)
+              ON DELETE CASCADE
+);
+
+CREATE TABLE "AWARDS_COACHES"
+(ID      INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    YEAR    INTEGER,
+    COACHID VARCHAR2(255),
+    AWARD   VARCHAR2(255),
+    LGID    VARCHAR2(255),
+    NOTE    VARCHAR2(255)
+);
+
+CREATE TABLE "PLAYERS_TEAMS"
+(ID                 INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    PLAYERID           VARCHAR2(255)   
+        REFERENCES "PLAYERS"
+              ON DELETE CASCADE,
+    YEAR               INTEGER,
+    STINT              INTEGER,
+    TMID               VARCHAR2(255),
+    LGID               VARCHAR2(255),
+    GP                 INTEGER,
+    GS                 INTEGER,
+    MINUTES            INTEGER,
+    POINTS             INTEGER,
+    OREBOUNDS          INTEGER,
+    DREBOUNDS          INTEGER,
+    REBOUNDS           INTEGER,
+    ASSISTS            INTEGER,
+    STEALS             INTEGER,
+    BLOCKS             INTEGER,
+    TURNOVERS          INTEGER,
+    PF                 INTEGER,
+    FGATTEMPTED        INTEGER,
+    FGMADE             INTEGER,
+    FTATTEMPTED        INTEGER,
+    FTMADE             INTEGER,
+    THREEATTEMPTED     INTEGER,
+    THREEMADE          INTEGER,
+    POSTGP             INTEGER,
+    POSTGS             INTEGER,
+    POSTMINUTES        INTEGER,
+    POSTPOINTS         INTEGER,
+    POSTOREBOUNDS      INTEGER,
+    POSTDREBOUNDS      INTEGER,
+    POSTREBOUNDS       INTEGER,
+    POSTASSISTS        INTEGER,
+    POSTSTEALS         INTEGER,
+    POSTBLOCKS         INTEGER,
+    POSTTURNOVERS      INTEGER,
+    POSTPF             INTEGER,
+    POSTFGATTEMPTED    INTEGER,
+    POSTFGMADE         INTEGER,
+    POSTFTATTEMPTED    INTEGER,
+    POSTFTMADE         INTEGER,
+    POSTTHREEATTEMPTED INTEGER,
+    POSTTHREEMADE      INTEGER,
+    NOTE               VARCHAR2(255),
+    FOREIGN KEY (TMID, YEAR) REFERENCES "TEAMS" (TMID, YEAR)
+);
+
+CREATE TABLE "SERIES_POST"
+(ID         INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    YEAR       INTEGER,
+    ROUND      VARCHAR2(255),
+    SERIES     VARCHAR2(255),
+    TMIDWINNER VARCHAR2(255),
+    LGIDWINNER VARCHAR2(255),
+    TMIDLOSER  VARCHAR2(255),
+    LGIDLOSER  VARCHAR2(255),
+    W          INTEGER,
+    L          INTEGER,
+    FOREIGN KEY (TMIDWINNER, YEAR) REFERENCES "TEAMS" (TMID, YEAR),
+    FOREIGN KEY (TMIDLOSER, YEAR) REFERENCES "TEAMS" (TMID, YEAR)
+);
+

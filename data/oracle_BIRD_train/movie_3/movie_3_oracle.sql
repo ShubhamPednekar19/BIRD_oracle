@@ -1,0 +1,196 @@
+CREATE TABLE "FILM_TEXT"
+(FILM_ID     INTEGER     NOT NULL  
+        PRIMARY KEY,
+    TITLE       VARCHAR2(255) NOT NULL  ,
+    DESCRIPTION VARCHAR2(255)         NULL
+);
+
+CREATE TABLE "ACTOR"
+(ACTOR_ID    INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    FIRST_NAME  VARCHAR2(255)                               NOT NULL  ,
+    LAST_NAME   VARCHAR2(255)                               NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "CATEGORY"
+(CATEGORY_ID INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    NAME        VARCHAR2(255)                               NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "COUNTRY"
+(COUNTRY_ID  INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    COUNTRY     VARCHAR2(255)                               NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "LANGUAGE"
+(LANGUAGE_ID INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    NAME        VARCHAR2(255)                               NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "CITY"
+(CITY_ID     INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    CITY        VARCHAR2(255)                               NOT NULL  ,
+    COUNTRY_ID  INTEGER                            NOT NULL  
+        REFERENCES "COUNTRY"
+             ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "ADDRESS"
+(ADDRESS_ID  INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ADDRESS     VARCHAR2(255)                               NOT NULL  ,
+    ADDRESS2    VARCHAR2(255),
+    DISTRICT    VARCHAR2(255)                               NOT NULL  ,
+    CITY_ID     INTEGER                            NOT NULL  
+        REFERENCES "CITY"
+             ,
+    POSTAL_CODE VARCHAR2(255),
+    PHONE       VARCHAR2(255)                               NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "CUSTOMER"
+(CUSTOMER_ID INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    STORE_ID    INTEGER                            NOT NULL  
+        ,
+    FIRST_NAME  VARCHAR2(255)                               NOT NULL  ,
+    LAST_NAME   VARCHAR2(255)                               NOT NULL  ,
+    EMAIL       VARCHAR2(255),
+    ADDRESS_ID  INTEGER                            NOT NULL  
+        REFERENCES "ADDRESS"
+             ,
+    ACTIVE      INTEGER  DEFAULT 1                 NOT NULL  ,
+    CREATE_DATE TIMESTAMP                           NOT NULL  ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "FILM"
+(FILM_ID              INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    TITLE                VARCHAR2(255)                               NOT NULL  ,
+    DESCRIPTION          VARCHAR2(255),
+    RELEASE_YEAR         VARCHAR2(255),
+    LANGUAGE_ID          INTEGER                            NOT NULL  
+        REFERENCES "LANGUAGE"
+             ,
+    ORIGINAL_LANGUAGE_ID INTEGER
+        REFERENCES "LANGUAGE"
+             ,
+    RENTAL_DURATION      INTEGER  DEFAULT 3                 NOT NULL  ,
+    RENTAL_RATE          FLOAT     DEFAULT 4.99              NOT NULL  ,
+    LENGTH               INTEGER,
+    REPLACEMENT_COST     FLOAT     DEFAULT 19.99             NOT NULL  ,
+    RATING               VARCHAR2(255)     DEFAULT 'G',
+    SPECIAL_FEATURES     VARCHAR2(255),
+    LAST_UPDATE          TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "FILM_ACTOR"
+(ACTOR_ID    INTEGER                            NOT NULL  
+        REFERENCES "ACTOR"
+             ,
+    FILM_ID     INTEGER                            NOT NULL  
+        REFERENCES "FILM"
+             ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  ,
+    PRIMARY KEY (ACTOR_ID, FILM_ID)
+);
+
+CREATE TABLE "FILM_CATEGORY"
+(FILM_ID     INTEGER                            NOT NULL  
+        REFERENCES "FILM"
+             ,
+    CATEGORY_ID INTEGER                            NOT NULL  
+        REFERENCES "CATEGORY"
+             ,
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  ,
+    PRIMARY KEY (FILM_ID, CATEGORY_ID)
+);
+
+CREATE TABLE "INVENTORY"
+(INVENTORY_ID INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    FILM_ID      INTEGER                            NOT NULL  
+        REFERENCES "FILM"
+             ,
+    STORE_ID     INTEGER                            NOT NULL  
+        ,
+    LAST_UPDATE  TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "STAFF"
+(STAFF_ID    INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    FIRST_NAME  VARCHAR2(255)                               NOT NULL  ,
+    LAST_NAME   VARCHAR2(255)                               NOT NULL  ,
+    ADDRESS_ID  INTEGER                            NOT NULL  
+        REFERENCES "ADDRESS"
+             ,
+    PICTURE     BLOB,
+    EMAIL       VARCHAR2(255),
+    STORE_ID    INTEGER                            NOT NULL  
+        ,
+    ACTIVE      INTEGER  DEFAULT 1                 NOT NULL  ,
+    USERNAME    VARCHAR2(255)                               NOT NULL  ,
+    PASSWORD    VARCHAR2(255),
+    LAST_UPDATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "RENTAL"
+(RENTAL_ID    INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    RENTAL_DATE  TIMESTAMP                           NOT NULL  ,
+    INVENTORY_ID INTEGER                            NOT NULL  
+        REFERENCES "INVENTORY"
+             ,
+    CUSTOMER_ID  INTEGER                            NOT NULL  
+        REFERENCES "CUSTOMER"
+             ,
+    RETURN_DATE  TIMESTAMP,
+    STAFF_ID     INTEGER                            NOT NULL  
+        REFERENCES "STAFF"
+             ,
+    LAST_UPDATE  TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  ,
+    UNIQUE (RENTAL_DATE, INVENTORY_ID, CUSTOMER_ID)
+);
+
+CREATE TABLE "PAYMENT"
+(PAYMENT_ID   INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    CUSTOMER_ID  INTEGER                            NOT NULL  
+        REFERENCES "CUSTOMER"
+             ,
+    STAFF_ID     INTEGER                            NOT NULL  
+        REFERENCES "STAFF"
+             ,
+    RENTAL_ID    INTEGER
+                                                    REFERENCES "RENTAL"
+                                                          ON DELETE SET NULL,
+    AMOUNT       FLOAT                               NOT NULL  ,
+    PAYMENT_DATE TIMESTAMP                           NOT NULL  ,
+    LAST_UPDATE  TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+
+CREATE TABLE "STORE"
+(STORE_ID         INTEGER
+        GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    MANAGER_STAFF_ID INTEGER                            NOT NULL  
+        UNIQUE
+        REFERENCES "STAFF"
+             ,
+    ADDRESS_ID       INTEGER                            NOT NULL  
+        REFERENCES "ADDRESS"
+             ,
+    LAST_UPDATE      TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL  
+);
+

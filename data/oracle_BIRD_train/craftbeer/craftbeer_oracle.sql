@@ -1,0 +1,21 @@
+CREATE TABLE "BREWERIES"
+(ID    INTEGER            
+        PRIMARY KEY,
+    NAME  VARCHAR2(255) NULL,
+    CITY  VARCHAR2(255) NULL,
+    STATE VARCHAR2(255) NULL
+);
+
+CREATE TABLE "BEERS"
+(ID         INTEGER   
+        PRIMARY KEY,
+    BREWERY_ID INTEGER   
+        CONSTRAINT BEERS_IBFK_1
+            REFERENCES "BREWERIES",
+    ABV        FLOAT,
+    IBU        FLOAT,
+    NAME       VARCHAR2(255)      ,
+    STYLE      VARCHAR2(255),
+    OUNCES     FLOAT      
+);
+

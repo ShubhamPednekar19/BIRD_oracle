@@ -1,0 +1,14 @@
+COMMENT ON COLUMN ANSWER.ANSWERTEXT IS 'The specific and detailed answer text of each question.';
+ALTER TABLE ANSWER MODIFY (ANSWERTEXT ANNOTATIONS (ADD value_description 'The content is highly depend on the question.'));
+COMMENT ON COLUMN ANSWER.SURVEYID IS 'The id of each survey.';
+ALTER TABLE ANSWER MODIFY (SURVEYID ANNOTATIONS (ADD value_description 'The SurveyID is simply survey year i.e., 2014, 2016, 2017, 2018, 2019.'));
+COMMENT ON COLUMN ANSWER.USERID IS 'The id of different user.';
+ALTER TABLE ANSWER MODIFY (USERID ANNOTATIONS (ADD value_description 'commonsense evidence: Some questions can contain multiple answers, thus the same user can appear more than once for that QuestionID.'));
+COMMENT ON COLUMN ANSWER.QUESTIONID IS 'The id of different questions.';
+ALTER TABLE ANSWER MODIFY (QUESTIONID ANNOTATIONS (ADD value_description 'commonsense evidence: Some questions can contain multiple answers, thus the same user can appear more than once for that QuestionID.'));
+COMMENT ON COLUMN QUESTION.QUESTIONTEXT IS 'The detailed text of the question.';
+COMMENT ON COLUMN QUESTION.QUESTIONID IS 'The unique id of the question.';
+ALTER TABLE QUESTION MODIFY (QUESTIONID ANNOTATIONS (ADD value_description 'Each questiontext can only have one unique questionid'));
+COMMENT ON COLUMN SURVEY.SURVEYID IS 'The unique id of each survey';
+ALTER TABLE SURVEY MODIFY (SURVEYID ANNOTATIONS (ADD value_description 'commonsense evidence: Each SurveyID is unique. And SurveyID is simply survey year ie 2014, 2016, 2017, 2018, 2019.'));
+COMMENT ON COLUMN SURVEY.DESCRIPTION IS 'The Description of the specific survey.';

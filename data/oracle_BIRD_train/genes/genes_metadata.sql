@@ -1,0 +1,16 @@
+COMMENT ON COLUMN CLASSIFICATION.GENEID IS 'unique identifier number of genes';
+COMMENT ON COLUMN CLASSIFICATION.LOCALIZATION IS 'location';
+COMMENT ON COLUMN GENES.GENEID IS 'identifier number of genes';
+COMMENT ON COLUMN GENES.ESSENTIAL IS 'essential';
+COMMENT ON COLUMN GENES.CLASS IS 'class';
+COMMENT ON COLUMN GENES.COMPLEX IS 'Complex';
+COMMENT ON COLUMN GENES.PHENOTYPE IS 'Phenotype';
+ALTER TABLE GENES MODIFY (PHENOTYPE ANNOTATIONS (ADD value_description '?: means: doesn''t exit the phenotype'));
+COMMENT ON COLUMN GENES.MOTIF IS 'Motif';
+COMMENT ON COLUMN GENES.CHROMOSOME IS 'Chromosome';
+COMMENT ON COLUMN GENES."FUNCTION" IS 'Function';
+COMMENT ON COLUMN INTERACTIONS.GENEID1 IS 'identifier number of genes';
+COMMENT ON COLUMN INTERACTIONS.GENEID2 IS 'identifier number of genes';
+COMMENT ON COLUMN INTERACTIONS."TYPE" IS 'Type';
+COMMENT ON COLUMN INTERACTIONS.EXPRESSION_CORR IS 'Expression correlation score';
+ALTER TABLE INTERACTIONS MODIFY (EXPRESSION_CORR ANNOTATIONS (ADD value_description 'range: (0,1)if the value is the positive then it''s "positively correlated"if the value is the negative then it''s "negatively correlated"if the value is very high positively, it means two genes are highly correlated'));

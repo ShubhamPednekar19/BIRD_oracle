@@ -1,0 +1,18 @@
+COMMENT ON COLUMN ADVISEDBY.P_ID IS 'id number identifying each person';
+COMMENT ON COLUMN ADVISEDBY.P_ID_DUMMY IS 'the id number identifying the advisor';
+COMMENT ON COLUMN COURSE.COURSE_ID IS 'unique id number identifying courses';
+COMMENT ON COLUMN COURSE.COURSELEVEL IS 'course level';
+ALTER TABLE COURSE MODIFY (COURSELEVEL ANNOTATIONS (ADD value_description 'commonsense evidence: Level_300: basic or medium undergraduate courses. Level_400: high-level or harder undergraduate course. Level_500: professional or master/graduate courses'));
+COMMENT ON COLUMN PERSON.P_ID IS 'the unique number identifying each person';
+COMMENT ON COLUMN PERSON.PROFESSOR IS 'whether the person is a professor';
+ALTER TABLE PERSON MODIFY (PROFESSOR ANNOTATIONS (ADD value_description '0: professor1: student'));
+COMMENT ON COLUMN PERSON.STUDENT IS 'whether the person is a student';
+ALTER TABLE PERSON MODIFY (STUDENT ANNOTATIONS (ADD value_description '0: professor1: student'));
+COMMENT ON COLUMN PERSON.HASPOSITION IS 'whether the person has a position in the faculty';
+ALTER TABLE PERSON MODIFY (HASPOSITION ANNOTATIONS (ADD value_description '0: the person is not a faculty memberCommon Sense evidence:faculty_aff: affiliated facultyfaculty_eme: faculty employee'));
+COMMENT ON COLUMN PERSON.INPHASE IS 'the phase of qualification the person is undergoing';
+ALTER TABLE PERSON MODIFY (INPHASE ANNOTATIONS (ADD value_description '0: the person is not undergoing the phase of qualification'));
+COMMENT ON COLUMN PERSON.YEARSINPROGRAM IS 'the year of the program the person is at';
+ALTER TABLE PERSON MODIFY (YEARSINPROGRAM ANNOTATIONS (ADD value_description '0: the person is not in any programsCommon Sense evidence:yearX means the person is on the Xth year of the program'));
+COMMENT ON COLUMN TAUGHTBY.COURSE_ID IS 'the identification number identifying each course';
+COMMENT ON COLUMN TAUGHTBY.P_ID IS 'the identification number identifying each person';

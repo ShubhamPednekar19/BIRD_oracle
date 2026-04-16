@@ -1,0 +1,33 @@
+CREATE TABLE "INCIDENTS"
+(CASE_NUMBER                VARCHAR2(255)    
+        PRIMARY KEY,
+    "DATE"                       DATE            ,
+    LOCATION                   VARCHAR2(255)    ,
+    SUBJECT_STATUSES           VARCHAR2(255)    ,
+    SUBJECT_WEAPON             VARCHAR2(255)    ,
+    SUBJECTS                   VARCHAR2(255)    ,
+    SUBJECT_COUNT              INTEGER             ,
+    OFFICERS                  VARCHAR2(255)   
+
+);
+
+CREATE TABLE "OFFICERS"
+(CASE_NUMBER VARCHAR2(255)   ,
+    RACE        VARCHAR2(255)         NULL,
+    GENDER      VARCHAR2(255)           ,
+    LAST_NAME   VARCHAR2(255)   ,
+    FIRST_NAME  VARCHAR2(255) NULL,
+    FULL_NAME   VARCHAR2(255)   ,
+    FOREIGN KEY (CASE_NUMBER) REFERENCES "INCIDENTS" (CASE_NUMBER)
+);
+
+CREATE TABLE "SUBJECTS"
+(CASE_NUMBER VARCHAR2(255)   ,
+    RACE        VARCHAR2(255)           ,
+    GENDER      VARCHAR2(255)           ,
+    LAST_NAME   VARCHAR2(255)   ,
+    FIRST_NAME  VARCHAR2(255) NULL,
+    FULL_NAME   VARCHAR2(255)   ,
+    FOREIGN KEY (CASE_NUMBER) REFERENCES "INCIDENTS" (CASE_NUMBER)
+);
+

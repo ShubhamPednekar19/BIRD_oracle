@@ -1,0 +1,60 @@
+CREATE TABLE "STATION"
+(ID                INTEGER   
+        PRIMARY KEY,
+    NAME              VARCHAR2(255),
+    LAT               FLOAT,
+    "LONG"              FLOAT,
+    DOCK_COUNT        INTEGER,
+    CITY              VARCHAR2(255),
+    INSTALLATION_DATE VARCHAR2(255)
+);
+
+CREATE TABLE "STATUS"
+(STATION_ID      INTEGER,
+    BIKES_AVAILABLE INTEGER,
+    DOCKS_AVAILABLE INTEGER,
+    TIME            VARCHAR2(255)
+);
+
+CREATE TABLE "TRIP"
+(ID                 INTEGER   
+        PRIMARY KEY,
+    DURATION           INTEGER,
+    START_DATE         VARCHAR2(255),
+    START_STATION_NAME VARCHAR2(255),
+    START_STATION_ID   INTEGER,
+    END_DATE           VARCHAR2(255),
+    END_STATION_NAME   VARCHAR2(255),
+    END_STATION_ID     INTEGER,
+    BIKE_ID            INTEGER,
+    SUBSCRIPTION_TYPE  VARCHAR2(255),
+    ZIP_CODE           INTEGER
+);
+
+CREATE TABLE "WEATHER"
+("DATE"                          VARCHAR2(255),
+    MAX_TEMPERATURE_F              INTEGER,
+    MEAN_TEMPERATURE_F             INTEGER,
+    MIN_TEMPERATURE_F              INTEGER,
+    MAX_DEW_POINT_F                INTEGER,
+    MEAN_DEW_POINT_F               INTEGER,
+    MIN_DEW_POINT_F                INTEGER,
+    MAX_HUMIDITY                   INTEGER,
+    MEAN_HUMIDITY                  INTEGER,
+    MIN_HUMIDITY                   INTEGER,
+    MAX_SEA_LEVEL_PRESSURE_INCHES  FLOAT,
+    MEAN_SEA_LEVEL_PRESSURE_INCHES FLOAT,
+    MIN_SEA_LEVEL_PRESSURE_INCHES  FLOAT,
+    MAX_VISIBILITY_MILES           INTEGER,
+    MEAN_VISIBILITY_MILES          INTEGER,
+    MIN_VISIBILITY_MILES           INTEGER,
+    MAX_WIND_SPEED_MPH             INTEGER,
+    MEAN_WIND_SPEED_MPH            INTEGER,
+    MAX_GUST_SPEED_MPH             INTEGER,
+    PRECIPITATION_INCHES           VARCHAR2(255),
+    CLOUD_COVER                    INTEGER,
+    EVENTS                         VARCHAR2(255),
+    WIND_DIR_DEGREES               INTEGER,
+    ZIP_CODE                       VARCHAR2(255)
+);
+

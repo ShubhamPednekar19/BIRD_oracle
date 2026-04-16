@@ -1,0 +1,41 @@
+CREATE TABLE "COINS"
+(ID            INTEGER   
+        PRIMARY KEY,
+    NAME          VARCHAR2(255),
+    SLUG          VARCHAR2(255),
+    SYMBOL        VARCHAR2(255),
+    STATUS        VARCHAR2(255),
+    CATEGORY      VARCHAR2(255),
+    DESCRIPTION   VARCHAR2(255),
+    SUBREDDIT     VARCHAR2(255),
+    NOTICE        VARCHAR2(255),
+    TAGS          VARCHAR2(255),
+    TAG_NAMES     VARCHAR2(255),
+    WEBSITE       VARCHAR2(255),
+    PLATFORM_ID   INTEGER,
+    DATE_ADDED    VARCHAR2(255),
+    DATE_LAUNCHED VARCHAR2(255)
+);
+
+CREATE TABLE "HISTORICAL"
+("DATE"               DATE,
+    COIN_ID            INTEGER,
+    CMC_RANK           INTEGER,
+    MARKET_CAP         FLOAT,
+    PRICE              FLOAT,
+    OPEN               FLOAT,
+    HIGH               FLOAT,
+    LOW                FLOAT,
+    CLOSE              FLOAT,
+    TIME_HIGH          VARCHAR2(255),
+    TIME_LOW           VARCHAR2(255),
+    VOLUME_24H         FLOAT,
+    PERCENT_CHANGE_1H  FLOAT,
+    PERCENT_CHANGE_24H FLOAT,
+    PERCENT_CHANGE_7D  FLOAT,
+    CIRCULATING_SUPPLY FLOAT,
+    TOTAL_SUPPLY       FLOAT,
+    MAX_SUPPLY         FLOAT,
+    NUM_MARKET_PAIRS   INTEGER
+);
+

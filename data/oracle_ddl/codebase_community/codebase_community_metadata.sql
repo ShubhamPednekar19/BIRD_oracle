@@ -1,0 +1,86 @@
+COMMENT ON COLUMN badges.Id IS 'the badge id';
+COMMENT ON COLUMN badges.UserId IS 'the unique id of the user';
+COMMENT ON COLUMN badges."Name" IS 'the badge name the user obtained';
+COMMENT ON COLUMN badges."Date" IS 'the date that the user obtained the badge';
+
+COMMENT ON COLUMN comments.Id IS 'the comment Id';
+COMMENT ON COLUMN comments.PostId IS 'the unique id of the post';
+COMMENT ON COLUMN comments.Score IS 'rating score';
+ALTER TABLE comments MODIFY (Score ANNOTATIONS (ADD value_description 'commonsense evidence:The score is from 0 to 100. The score more than 60 refers that the comment is a positive comment. The score less than 60 refers that the comment is a negative comment.'));
+COMMENT ON COLUMN comments."Text" IS 'the detailed content of the comment';
+COMMENT ON COLUMN comments.CreationDate IS 'the creation date of the comment';
+COMMENT ON COLUMN comments.UserId IS 'the id of the user who post the comment';
+COMMENT ON COLUMN comments.UserDisplayName IS 'user''s display name';
+
+COMMENT ON COLUMN postHistory.Id IS 'the post history id';
+COMMENT ON COLUMN postHistory.PostHistoryTypeId IS 'the id of the post history type';
+COMMENT ON COLUMN postHistory.PostId IS 'the unique id of the post';
+COMMENT ON COLUMN postHistory.RevisionGUID IS 'the revision globally unique id of the post';
+COMMENT ON COLUMN postHistory.CreationDate IS 'the creation date of the post';
+COMMENT ON COLUMN postHistory.UserId IS 'the user who post the post';
+COMMENT ON COLUMN postHistory."Text" IS 'the detailed content of the post';
+COMMENT ON COLUMN postHistory."Comment" IS 'comments of the post';
+COMMENT ON COLUMN postHistory.UserDisplayName IS 'user''s display name';
+
+COMMENT ON COLUMN postLinks.Id IS 'the post link id';
+COMMENT ON COLUMN postLinks.CreationDate IS 'the creation date of the post link';
+COMMENT ON COLUMN postLinks.PostId IS 'the post id';
+COMMENT ON COLUMN postLinks.RelatedPostId IS 'the id of the related post';
+COMMENT ON COLUMN postLinks.LinkTypeId IS 'the id of the link type';
+
+COMMENT ON COLUMN posts.Id IS 'the post id';
+COMMENT ON COLUMN posts.PostTypeId IS 'the id of the post type';
+COMMENT ON COLUMN posts.AcceptedAnswerId IS 'the accepted answer id of the post';
+COMMENT ON COLUMN posts.CreaionDate IS 'the creation date of the post';
+COMMENT ON COLUMN posts.Score IS 'the score of the post';
+COMMENT ON COLUMN posts.ViewCount IS 'the view count of the post';
+ALTER TABLE posts MODIFY (ViewCount ANNOTATIONS (ADD value_description 'commonsense evidence:Higher view count means the post has higher popularity'));
+COMMENT ON COLUMN posts."Body" IS 'the body of the post';
+COMMENT ON COLUMN posts.OwnerUserId IS 'the id of the owner user';
+COMMENT ON COLUMN posts.LasActivityDate IS 'the last activity date';
+COMMENT ON COLUMN posts.Title IS 'the title of the post';
+COMMENT ON COLUMN posts.Tags IS 'the tag of the post';
+COMMENT ON COLUMN posts.AnswerCount IS 'the total number of answers of the post';
+COMMENT ON COLUMN posts.CommentCount IS 'the total number of comments of the post';
+COMMENT ON COLUMN posts.FavoriteCount IS 'the total number of favorites of the post';
+ALTER TABLE posts MODIFY (FavoriteCount ANNOTATIONS (ADD value_description 'commonsense evidence:more favorite count refers to more valuable posts.'));
+COMMENT ON COLUMN posts.LastEditorUserId IS 'the id of the last editor';
+COMMENT ON COLUMN posts.LastEditDate IS 'the last edit date';
+COMMENT ON COLUMN posts.CommunityOwnedDate IS 'the community owned date';
+COMMENT ON COLUMN posts.ParentId IS 'the id of the parent post';
+ALTER TABLE posts MODIFY (ParentId ANNOTATIONS (ADD value_description 'commonsense evidence:If the parent id is null, the post is the root post. Otherwise, the post is the child post of other post.'));
+COMMENT ON COLUMN posts.ClosedDate IS 'the closed date of the post';
+ALTER TABLE posts MODIFY (ClosedDate ANNOTATIONS (ADD value_description 'commonsense evidence:if ClosedDate is null or empty, it means this post is not well-finishedif CloseDate is not null or empty, it means this post has well-finished.'));
+COMMENT ON COLUMN posts.OwnerDisplayName IS 'the display name of the post owner';
+COMMENT ON COLUMN posts.LastEditorDisplayName IS 'the display name of the last editor';
+
+COMMENT ON COLUMN tags.Id IS 'the tag id';
+COMMENT ON COLUMN tags.TagName IS 'the name of the tag';
+COMMENT ON COLUMN tags."Count" IS 'the count of posts that contain this tag';
+ALTER TABLE tags MODIFY ("Count" ANNOTATIONS (ADD value_description 'more counts --> this tag is more popular'));
+COMMENT ON COLUMN tags.ExcerptPostId IS 'the excerpt post id of the tag';
+COMMENT ON COLUMN tags.WikiPostId IS 'the wiki post id of the tag';
+
+COMMENT ON COLUMN users.Id IS 'the user id';
+COMMENT ON COLUMN users.Reputation IS 'the user''s reputation';
+ALTER TABLE users MODIFY (Reputation ANNOTATIONS (ADD value_description 'commonsense evidence:The user with higher reputation has more influence.'));
+COMMENT ON COLUMN users.CreationDate IS 'the creation date of the user account';
+COMMENT ON COLUMN users.DisplayName IS 'the user''s display name';
+COMMENT ON COLUMN users.LastAccessDate IS 'the last access date of the user account';
+COMMENT ON COLUMN users.WebsiteUrl IS 'the website url of the user account';
+COMMENT ON COLUMN users."Location" IS 'user''s location';
+COMMENT ON COLUMN users.AboutMe IS 'the self introduction of the user';
+COMMENT ON COLUMN users.Views IS 'the number of views';
+COMMENT ON COLUMN users.UpVotes IS 'the number of upvotes';
+COMMENT ON COLUMN users.DownVotes IS 'the number of downvotes';
+COMMENT ON COLUMN users.AccountId IS 'the unique id of the account';
+COMMENT ON COLUMN users.Age IS 'user''s age';
+ALTER TABLE users MODIFY (Age ANNOTATIONS (ADD value_description ' teenager: 13-18 adult: 19-65 elder: > 65'));
+COMMENT ON COLUMN users.ProfileImageUrl IS 'the profile image url';
+
+COMMENT ON COLUMN votes.Id IS 'the vote id';
+COMMENT ON COLUMN votes.PostId IS 'the id of the post that is voted';
+COMMENT ON COLUMN votes.VoteTypeId IS 'the id of the vote type';
+COMMENT ON COLUMN votes.CreationDate IS 'the creation date of the vote';
+COMMENT ON COLUMN votes.UserId IS 'the id of the voter';
+COMMENT ON COLUMN votes.BountyAmount IS 'the amount of bounty';

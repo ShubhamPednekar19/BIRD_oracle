@@ -1,0 +1,10 @@
+COMMENT ON COLUMN TAGS."INDEX" IS 'index';
+COMMENT ON COLUMN TAGS.ID IS 'release identifier which can be matched with id field in the torrents table';
+COMMENT ON COLUMN TAGS.TAG IS 'tag';
+COMMENT ON COLUMN TORRENTS.GROUPNAME IS 'release title';
+COMMENT ON COLUMN TORRENTS.TOTALSNATCHED IS 'number of times the release has been downloaded';
+COMMENT ON COLUMN TORRENTS.ARTIST IS 'artist / group name';
+COMMENT ON COLUMN TORRENTS.GROUPYEAR IS 'release year';
+COMMENT ON COLUMN TORRENTS.RELEASETYPE IS 'release type (e.g., album, single, mixtape)';
+COMMENT ON COLUMN TORRENTS.GROUPID IS 'Unique release identifier from What.CD. Used to ensure no releases are duplicates.';
+COMMENT ON COLUMN TORRENTS.ID IS 'unique identifier (essentially an index)';

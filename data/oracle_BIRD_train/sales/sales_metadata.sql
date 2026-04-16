@@ -1,0 +1,18 @@
+COMMENT ON COLUMN CUSTOMERS.CUSTOMERID IS 'the unique id of the customer';
+COMMENT ON COLUMN CUSTOMERS.FIRSTNAME IS 'the customer''s first name';
+COMMENT ON COLUMN CUSTOMERS.MIDDLEINITIAL IS 'the customer''s middle initial';
+COMMENT ON COLUMN CUSTOMERS.LASTNAME IS 'the customer''s last name';
+COMMENT ON COLUMN EMPLOYEES.EMPLOYEEID IS 'the unique id of the employee';
+COMMENT ON COLUMN EMPLOYEES.FIRSTNAME IS 'the employee''s first name';
+COMMENT ON COLUMN EMPLOYEES.MIDDLEINITIAL IS 'the employee''s middle initial';
+COMMENT ON COLUMN EMPLOYEES.LASTNAME IS 'the employee''s last name';
+COMMENT ON COLUMN PRODUCTS.PRODUCTID IS 'the unique id of the product';
+COMMENT ON COLUMN PRODUCTS."NAME" IS 'the product name';
+COMMENT ON COLUMN PRODUCTS.PRICE IS 'the price of the product';
+ALTER TABLE PRODUCTS MODIFY (PRICE ANNOTATIONS (ADD value_description 'unit pricecommonsense evidence:if the price = 0.0, it means this product is free or a gift'));
+COMMENT ON COLUMN SALES.SALESID IS 'the unique id of the sales';
+COMMENT ON COLUMN SALES.SALESPERSONID IS 'the unique id of the sale person';
+COMMENT ON COLUMN SALES.CUSTOMERID IS 'the unique id of the customer';
+COMMENT ON COLUMN SALES.PRODUCTID IS 'the unique id of the product';
+COMMENT ON COLUMN SALES.QUANTITY IS 'trading quantity';
+ALTER TABLE SALES MODIFY (QUANTITY ANNOTATIONS (ADD value_description 'commonsense evidence:total price = quantity x Products'' Price'));

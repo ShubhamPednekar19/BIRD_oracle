@@ -1,0 +1,13 @@
+COMMENT ON COLUMN BEERS.ID IS 'unique id number of beers';
+COMMENT ON COLUMN BEERS.BREWERY_ID IS 'id number of the breweries';
+COMMENT ON COLUMN BEERS.ABV IS 'alcohol by volume';
+ALTER TABLE BEERS MODIFY (ABV ANNOTATIONS (ADD value_description 'Alcohol by VolumeABV is the most common measurement of alcohol content in beer; it simply indicates how much of the total volume of liquid in a beer is made up of alcohol.'));
+COMMENT ON COLUMN BEERS.IBU IS 'International Bitterness Units';
+ALTER TABLE BEERS MODIFY (IBU ANNOTATIONS (ADD value_description 'IBU stands for International Bitterness Units, a scale to gauge the level of a beer''s bitterness. More specifically, IBUs measure the parts per million of is humulone from hops in a beer, which gives beer bitterness.'));
+COMMENT ON COLUMN BEERS."NAME" IS 'name of beers';
+COMMENT ON COLUMN BEERS.STYLE IS 'style / sorts of beers';
+COMMENT ON COLUMN BEERS.OUNCES IS 'ounces';
+COMMENT ON COLUMN BREWERIES.ID IS 'unique ID of the breweries';
+COMMENT ON COLUMN BREWERIES."NAME" IS 'name of the breweries';
+COMMENT ON COLUMN BREWERIES.CITY IS 'city';
+COMMENT ON COLUMN BREWERIES.STATE IS 'state';

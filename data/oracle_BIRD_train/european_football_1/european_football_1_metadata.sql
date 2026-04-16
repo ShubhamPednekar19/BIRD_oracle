@@ -1,0 +1,13 @@
+COMMENT ON COLUMN DIVISIONS.DIVISION IS 'division id';
+COMMENT ON COLUMN DIVISIONS."NAME" IS 'name of the division';
+COMMENT ON COLUMN DIVISIONS.COUNTRY IS 'country of the division';
+COMMENT ON COLUMN MATCHS.DIV IS 'Division Id';
+COMMENT ON COLUMN MATCHS."DATE" IS 'Match Date';
+ALTER TABLE MATCHS MODIFY ("DATE" ANNOTATIONS (ADD value_description 'YYYY-MM-DD'));
+COMMENT ON COLUMN MATCHS.HOMETEAM IS 'Name of Home Team';
+COMMENT ON COLUMN MATCHS.AWAYTEAM IS 'Name of Away Team';
+COMMENT ON COLUMN MATCHS.FTHG IS 'Final-time Home-team Goals';
+COMMENT ON COLUMN MATCHS.FTAG IS 'Final-time Away-team Goals';
+COMMENT ON COLUMN MATCHS.FTR IS 'Final-time Results';
+ALTER TABLE MATCHS MODIFY (FTR ANNOTATIONS (ADD value_description 'commonsense evidence:H stands for home victory, which means FTHG is higher than FTAGA stands for away victory, which means FTAG is higher than FTHGD stands for draft, which means FTHG equals to FTAG'));
+COMMENT ON COLUMN MATCHS.SEASON IS 'season of the match';

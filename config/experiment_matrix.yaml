@@ -1,0 +1,40 @@
+# Experiment config for run_experiment_matrix.py
+#
+# HOW TO USE THIS FILE:
+# 1) Keep the JSON braces/quotes/commas structure.
+# 2) You can add comments on separate lines starting with '#'.
+# 3) To run multiple experiments for one field, add multiple values in the list.
+#
+# IMPORTANT FOR MULTIPLE RSF/RRF WEIGHT SETS:
+# You can pass list values inside scorer_overrides to auto-generate runs.
+# Example below runs RSF with text score weight = 2, 4, 6 (and vector weight fixed at 10).
+
+{
+  "connection_string": "phoenix520030.dev3sub2phx.databasede3phx.oraclevcn.com:1623/cdb1_pdb1.regress.rdbms.dev.us.oracle.com",
+  "modes": ["unified", "parallel"],
+  "search_types": ["vector"],
+  "hybrid_scorers": ["RRF"],
+  "dataset_forms": ["single-user"],
+
+  "common": {
+    "discover_k": 15,
+    "discover_score_threshold": 0.60
+  },
+
+  "scorer_overrides": {
+    "RSF": {
+      "discover_vector_score_weight": [10],
+      "discover_text_score_weight": [2,4,6,8,10]
+    },
+    "RRF": {
+      "discover_vector_rank_penalty": [1,2,3,4],
+      "discover_text_rank_penalty": [5]
+    }
+  },
+
+  "results_root": "results_dev",
+
+  # Optional extra CLI args appended to every run
+  # "passthrough_args": ["--max-questions", "100"]
+  "passthrough_args": []
+}

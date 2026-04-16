@@ -1,0 +1,14 @@
+COMMENT ON COLUMN DISABLED."NAME" IS 'the name of the disabled students';
+COMMENT ON COLUMN ENLIST."NAME" IS 'the name of the enlisted students';
+COMMENT ON COLUMN ENLIST.ORGAN IS 'the organization that the student enlisted in';
+COMMENT ON COLUMN FILED_FOR_BANKRUPCY."NAME" IS 'student name who filed for bankruptcy';
+COMMENT ON COLUMN LONGEST_ABSENSE_FROM_SCHOOL."NAME" IS 'student''s name';
+COMMENT ON COLUMN LONGEST_ABSENSE_FROM_SCHOOL."MONTH" IS 'the duration of absence';
+ALTER TABLE LONGEST_ABSENSE_FROM_SCHOOL MODIFY ("MONTH" ANNOTATIONS (ADD value_description 'commonsense evidence:0 means that the student has never been absent.'));
+COMMENT ON COLUMN MALE."NAME" IS 'student''s name who are male';
+ALTER TABLE MALE MODIFY ("NAME" ANNOTATIONS (ADD value_description 'commonsense evidence:the students who are not in this list are female.'));
+COMMENT ON COLUMN NO_PAYMENT_DUE."NAME" IS 'student''s name';
+COMMENT ON COLUMN NO_PAYMENT_DUE.BOOL IS 'whether the student has payment dues';
+ALTER TABLE NO_PAYMENT_DUE MODIFY (BOOL ANNOTATIONS (ADD value_description 'commonsense evidence: neg: the student doesn''t have payment due pos: the student has payment due'));
+COMMENT ON COLUMN PERSON."NAME" IS 'student''s name';
+COMMENT ON COLUMN UNEMPLOYED."NAME" IS 'student who is unemployed';
